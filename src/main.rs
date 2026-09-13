@@ -1,9 +1,10 @@
 //! fyrst.dev global CLI (`fyrst-cli`).
 //!
 //! Database dumps are owned by `shopware-cli project dump`. This binary does
-//! not wrap dump. Database import is `fyrst-cli shopware db import` (MySQL
-//! client via Compose exec or a one-shot client image). Other shopware verbs
-//! still exit 2 except `sync restore` for the DB path.
+//! not wrap dump. `shopware init-env` finishes shop-root `.env`. Database
+//! import is `fyrst-cli shopware db import` (MySQL client via Compose exec or
+//! a one-shot client image). Other shopware verbs still exit 2 except
+//! `sync restore` for the DB path.
 
 mod cli;
 mod shopware;

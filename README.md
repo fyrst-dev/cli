@@ -9,8 +9,9 @@ License: MIT.
 
 ## Status
 
-**Implemented:** `fyrst-cli shopware db import` — load a `.sql` or `.sql.gz`
-dump into this shop's database. shopware-cli has no import; this is the gap
+**Implemented:** `fyrst-cli shopware init-env` (shop-root `.env` after create
++ Flex) and `fyrst-cli shopware db import` — load a `.sql` or `.sql.gz`
+dump into this shop's database. shopware-cli has no import; that is the gap
 this CLI fills. `fyrst-cli shopware sync restore --data db` uses the same
 import module (`--snapshot-dir/db.sql.gz` or `db.sql`).
 
@@ -20,7 +21,8 @@ does not wrap or shell out to shopware-cli for dump.
 
 **Still stub (exit 2):** `shopware sync snapshot` (points operators at
 shopware-cli for DB; bind-mount volumes remain stub), bind-mount volume
-restore, remote SSH `--from`, and every other `shopware` verb.
+restore, remote SSH `--from`, and remaining `shopware` verbs (`release`,
+`rollback`, `sync sync`, `sync-local`, `backup`).
 
 This CLI does not reimplement dump, Compose release, or
 `fyrst:sales-channel:rewrite-urls`. Overlay scripts live in
@@ -89,7 +91,7 @@ does not dump.
 ## Command tree
 
 ```
-fyrst-cli shopware init-env
+fyrst-cli shopware init-env            # shop-root .env finisher (this is real)
 fyrst-cli shopware release
 fyrst-cli shopware rollback
 fyrst-cli shopware db import          # SQL import (this is real)
@@ -114,6 +116,7 @@ fyrst-cli shopware backup restore
 
 ```text
 fyrst-cli shopware --help
+fyrst-cli shopware init-env --help
 fyrst-cli shopware db import --help
 ```
 
@@ -128,6 +131,25 @@ shopware-cli project dump --skip-lock-tables --compression=gzip --output db.sql.
 
 See the [Shopware CLI dump docs](https://developer.shopware.com/docs/products/tools/cli/project-commands/mysql-dump.html)
 and Flex overlay `deploy/lib/sync-dump.sh`.
+
+## Init env
+
+Run from the shop checkout (directory with `.env` or `.env.example`), or set
+`COMPOSE_DIR`. Finishes shop-root `.env` after create + Flex. Does not
+overwrite the whole file. Does not invent MYSQL passwords or `APP_URL`.
+
+```bash
+# Print the plan (does not write .env; never prints APP_SECRET / MYSQL passwords)
+fyrst-cli shopware init-env --shop-id acme --vps --dry-run
+
+fyrst-cli shopware init-env --shop-id acme --env live --vps --image ghcr.io/example/acme
+fyrst-cli shopware init-env --shop-id acme --generate-app-secret
+```
+
+`--shop-id` is required unless `SHOPWARE_SHOP_ID` is already set in `.env`.
+`--env` defaults to `live` when empty and keeps an existing non-empty value.
+`--vps` comments `COMPOSE_PROJECT_NAME=` (does not leave an empty assignment).
+`--dry-run` does not write. A real write `chmod 600`s `.env`.
 
 ## Import
 
@@ -187,6 +209,7 @@ For local development (also see [Install](#install) for release binaries):
 ```bash
 cargo build
 cargo run -- shopware --help
+cargo run -- shopware init-env --help
 cargo run -- shopware db import --help
 cargo test
 ```

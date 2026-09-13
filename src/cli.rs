@@ -23,6 +23,7 @@ Command tree:
 
 Dump = shopware-cli project dump only (fyrst-cli does not dump).
 Import = fyrst-cli shopware db import (also used by sync restore --data db).
+init-env = fyrst-cli shopware init-env (shop-root .env after create + Flex).
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
@@ -34,6 +35,7 @@ Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
     long_about = "Home of the fyrst.dev global CLI (`fyrst-cli`).\n\n\
 Shopware CD ops live under `shopware`. Other fyrst namespaces can be added later.\n\n\
 Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap dump. \
+`shopware init-env` finishes shop-root .env after create + Flex. \
 `shopware db import` loads a .sql / .sql.gz via the MySQL/MariaDB client. \
 `shopware sync snapshot` is not a dump command. Other shopware subcommands still exit 2 \
 with \"not implemented\".",
@@ -59,6 +61,10 @@ pub enum Command {
     about = "Shopware CD operations",
     long_about = "Shopware CD operations. Names match Flex overlay scripts under \
 deploy/ in fyrst-dev/recipes (`fyrst/shopware-cd`).\n\n\
+`init-env` is implemented: finish shop-root `.env` after create + Flex (merge missing \
+keys from `.env.example`, shop id / deploy env, optional IMAGE / APP_SECRET, `--vps` \
+comments COMPOSE_PROJECT_NAME). `--dry-run` prints the plan and does not write. \
+Passwords and APP_SECRET are never printed.\n\n\
 `db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
 one-shot client image for DATABASE_URL). `sync restore --data db` uses the same module. \
 Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
@@ -96,7 +102,7 @@ pub enum ShopwareCommand {
     Backup(BackupCommand),
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum DeployEnv {
     Live,
@@ -105,13 +111,34 @@ pub enum DeployEnv {
     Dev,
 }
 
+impl DeployEnv {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Staging => "staging",
+            Self::Playground => "playground",
+            Self::Dev => "dev",
+        }
+    }
+}
+
 #[derive(Debug, Args)]
+#[command(
+    after_help = "Does not overwrite the whole .env. Does not invent MYSQL passwords or APP_URL.\n\n\
+Environment:\n  \
+  COMPOSE_DIR    Shop checkout (default: walk from cwd for .env / .env.example + deploy/)\n\n\
+Examples:\n  \
+  fyrst-cli shopware init-env --shop-id acme\n  \
+  fyrst-cli shopware init-env --shop-id acme --env live --vps --image ghcr.io/example/acme\n  \
+  fyrst-cli shopware init-env --shop-id acme --generate-app-secret\n  \
+  fyrst-cli shopware init-env --shop-id acme --vps --dry-run\n"
+)]
 pub struct InitEnvArgs {
-    /// Shop slug (required unless SHOPWARE_SHOP_ID is already non-empty)
+    /// Shop slug (required unless SHOPWARE_SHOP_ID is already non-empty in `.env`)
     #[arg(long = "shop-id", value_name = "SLUG")]
     pub shop_id: Option<String>,
 
-    /// live | staging | playground | dev (default live when unset/empty)
+    /// live | staging | playground | dev (default live when unset/empty; keep existing non-empty)
     #[arg(long = "env", value_enum, value_name = "NAME")]
     pub env: Option<DeployEnv>,
 
@@ -123,7 +150,7 @@ pub struct InitEnvArgs {
     #[arg(long)]
     pub vps: bool,
 
-    /// Set APP_SECRET with openssl rand -hex 32 if empty
+    /// Set APP_SECRET with openssl rand -hex 32 if empty (value is never printed)
     #[arg(long = "generate-app-secret")]
     pub generate_app_secret: bool,
 
@@ -349,6 +376,38 @@ mod tests {
             db.find_subcommand("import").is_some(),
             "missing shopware db import",
         );
+    }
+
+    #[test]
+    fn init_env_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "init-env",
+            "--shop-id",
+            "acme",
+            "--env",
+            "staging",
+            "--image",
+            "ghcr.io/example/acme",
+            "--vps",
+            "--generate-app-secret",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::InitEnv(op),
+            }) => {
+                assert_eq!(op.shop_id.as_deref(), Some("acme"));
+                assert_eq!(op.env, Some(DeployEnv::Staging));
+                assert_eq!(op.image.as_deref(), Some("ghcr.io/example/acme"));
+                assert!(op.vps);
+                assert!(op.generate_app_secret);
+                assert!(op.dry_run);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
     }
 
     #[test]
