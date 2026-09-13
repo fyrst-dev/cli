@@ -5,8 +5,9 @@
 //! by `shopware sync restore --data db`). `init-env` finishes shop-root `.env`
 //! (recipes `deploy/init-env.sh`). VPS **release** is
 //! `fyrst-cli shopware release`. **Rollback** is
-//! `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`). Other verbs
-//! stay stubs. See docs/ADR-0001-shopware-namespace.md.
+//! `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`). `sync snapshot`
+//! copies bind-mount trees (not a dump). Other verbs stay stubs. See
+//! docs/ADR-0001-shopware-namespace.md.
 
 mod compose;
 mod data;
@@ -22,6 +23,8 @@ mod restore;
 mod rollback;
 mod rollout;
 mod snapshot;
+mod ssh;
+mod volumes;
 
 use crate::cli::{BackupCommand, DbCommand, ShopwareArgs, ShopwareCommand, SyncCommand};
 use std::process::ExitCode;

@@ -22,14 +22,18 @@ Compose stack (never builds images).
 compose files and order as `deploy/vps-release.sh`. Writes `.deployed-tag`
 only after success.
 
+`fyrst-cli shopware sync snapshot` copies bind-mount / volume trees into
+`--snapshot-dir/data/<item>/` (local and remote SSH `--from`). It does **not**
+dump.
+
 **Dump is not in fyrst-cli.** Database dumps are owned completely by
 `shopware-cli project dump`. This CLI does not provide a dump command and
-does not wrap or shell out to shopware-cli for dump.
+does not wrap or shell out to shopware-cli for dump. `--data db` on snapshot
+exits 2 with that instruction.
 
-**Still stub (exit 2):** `shopware sync snapshot` (points operators at
-shopware-cli for DB; bind-mount volumes remain stub), bind-mount volume
-restore, remote SSH `--from`, and remaining `shopware` verbs (`sync sync`,
-`sync-local`, `backup`).
+**Still stub (exit 2):** bind-mount volume restore, and remaining `shopware`
+verbs (`sync sync`, `sync-local`, `backup`). Snapshot `--data db` still exits
+2 (points operators at shopware-cli; not a dump wrap).
 
 This CLI does not reimplement dump or
 `fyrst:sales-channel:rewrite-urls`. Overlay scripts live in
@@ -103,7 +107,7 @@ fyrst-cli shopware init-env            # shop-root .env finisher (this is real)
 fyrst-cli shopware release            # VPS compose pull + recreate
 fyrst-cli shopware rollback           # VPS rollback to .previous-tag
 fyrst-cli shopware db import          # SQL import (this is real)
-fyrst-cli shopware sync snapshot       # not a dump; use shopware-cli
+fyrst-cli shopware sync snapshot       # volumes; dump = shopware-cli
 fyrst-cli shopware sync restore        # DB path = same import module
 fyrst-cli shopware sync sync
 fyrst-cli shopware sync-local
