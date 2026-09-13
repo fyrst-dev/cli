@@ -11,10 +11,12 @@
 //! bind-mount volumes and opt-in rewrite via compose `web`. `shopware sync sync`
 //! pulls bind-mounts over SSH and imports an existing dump (does not dump).
 //! `shopware sync-local` rsyncs VPS upload trees into a local project-dev
-//! checkout (never DB). Other verbs stay stubs. See
+//! checkout (never DB). `shopware backup backup` copies bind-mount trees and
+//! an operator-provided dump file (live allowed). Other verbs stay stubs. See
 //! docs/ADR-0001-shopware-namespace.md.
 
 mod app;
+mod backup;
 mod compose;
 mod data;
 mod env;
@@ -23,7 +25,9 @@ mod error;
 mod import;
 mod init_env;
 mod live;
+mod lock;
 mod mysql;
+mod prune;
 mod release;
 mod restore;
 mod rewrite;
@@ -33,6 +37,7 @@ mod snapshot;
 mod ssh;
 mod sync;
 mod sync_local;
+mod target;
 mod volumes;
 
 use crate::cli::{BackupCommand, DbCommand, ShopwareArgs, ShopwareCommand, SyncCommand};
@@ -96,9 +101,13 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
                 e.exit_code()
             }
         },
-        ShopwareCommand::Backup(BackupCommand::Backup(_)) => {
-            not_implemented("shopware backup backup")
-        }
+        ShopwareCommand::Backup(BackupCommand::Backup(op)) => match backup::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
         ShopwareCommand::Backup(BackupCommand::Prune(_)) => {
             not_implemented("shopware backup prune")
         }

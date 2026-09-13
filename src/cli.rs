@@ -30,6 +30,7 @@ Snapshot volumes = fyrst-cli shopware sync snapshot (bind-mount trees; not a dum
 sync restore also restores bind-mount volumes and opt-in rewrite via compose web.
 sync sync = pull: rsync remote bind-mounts + import of an already-present dump (does not dump).
 sync-local = VPS → local project-dev rsync (never DB; not SHOPWARE_DATA_ROOT).
+Backup = fyrst-cli shopware backup backup (volumes + operator db.sql.gz; live allowed).
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
@@ -50,7 +51,8 @@ Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap
 opt-in rewrite via compose web). \
 `shopware sync sync` pulls from `--from` (rsync bind-mounts + import of an already-present dump) and does not dump. \
 `shopware sync-local` rsyncs VPS upload trees into a local project-dev checkout (never DB). \
-Other shopware subcommands still exit 2 with \"not implemented\".",
+`shopware backup backup` copies bind-mount trees into BACKUP_TARGET (live allowed) \
+and never wraps dump. Other shopware subcommands still exit 2 with \"not implemented\".",
     arg_required_else_help = true,
     subcommand_required = true,
     propagate_version = true
@@ -91,7 +93,9 @@ import `db.sql.gz` from `--snapshot-dir` if `--data` includes db (does not dump)
 database, never local SHOPWARE_DATA_ROOT). \
 Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
 `rollback` is implemented: same compose files and order as `vps-release.sh`, with \
-IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).",
+IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).\n\n\
+`backup backup` copies bind-mount trees (and an operator-provided db.sql.gz) into \
+BACKUP_TARGET; it is allowed on live. `backup prune` / `backup restore` are still stubs.",
     after_help = SHOPWARE_COMMAND_TREE
 )]
 pub struct ShopwareArgs {
@@ -284,7 +288,7 @@ pub struct SyncLocalArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum BackupCommand {
-    /// Snapshot DB + bind-mount trees into BACKUP_TARGET (timestamped)
+    /// Copy bind-mount trees (+ operator db.sql.gz) into BACKUP_TARGET (timestamped; live allowed)
     Backup(BackupOpArgs),
     /// Delete artifacts older than BACKUP_KEEP_DAYS (also runs after backup)
     Prune(BackupOpArgs),
@@ -298,7 +302,7 @@ pub struct BackupOpArgs {
     #[arg(long = "data", value_name = "LIST")]
     pub data: Option<String>,
 
-    /// Print actions; do not dump, copy, prune, or restore
+    /// Print snapshot/copy/prune actions; do not copy, dump, or delete
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -550,6 +554,29 @@ mod tests {
                 assert_eq!(op.data.as_deref(), Some("media,files"));
                 assert_eq!(op.remote_data_root.as_deref(), Some("/data"));
                 assert!(op.delete);
+                assert!(op.dry_run);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn backup_backup_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "backup",
+            "backup",
+            "--data",
+            "media,db",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Backup(BackupCommand::Backup(op)),
+            }) => {
+                assert_eq!(op.data.as_deref(), Some("media,db"));
                 assert!(op.dry_run);
             }
             other => panic!("unexpected parse: {other:?}"),
