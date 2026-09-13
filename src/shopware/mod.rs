@@ -6,8 +6,9 @@
 //! (recipes `deploy/init-env.sh`). VPS **release** is
 //! `fyrst-cli shopware release`. **Rollback** is
 //! `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`). `sync snapshot`
-//! copies bind-mount trees (not a dump). Other verbs stay stubs. See
-//! docs/ADR-0001-shopware-namespace.md.
+//! copies bind-mount trees (not a dump). `sync restore` also restores
+//! bind-mount volumes and opt-in rewrite via compose `web`. Other verbs stay
+//! stubs. See docs/ADR-0001-shopware-namespace.md.
 
 mod compose;
 mod data;
@@ -20,6 +21,7 @@ mod live;
 mod mysql;
 mod release;
 mod restore;
+mod rewrite;
 mod rollback;
 mod rollout;
 mod snapshot;

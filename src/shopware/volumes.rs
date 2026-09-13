@@ -1,13 +1,15 @@
-//! Bind-mount / named-volume snapshot (recipes `deploy/lib/sync-volumes.sh`).
+//! Bind-mount / named-volume snapshot and restore (recipes `deploy/lib/sync-volumes.sh`).
 //!
 //! Layout: `--snapshot-dir/data/<item>/` for bind-mount rsync, or
 //! `--snapshot-dir/volumes/<item>.tar.gz` when the bind-mount is missing
 //! (named volume via `SYNC_ARCHIVE_IMAGE`, default `alpine:3.20`).
 //! Never runs shopware-cli.
 
-use super::env::{archive_image, derive_project_name, have_cmd, ShopEnv};
+use super::env::{derive_project_name, have_cmd, ShopEnv};
+
+pub use super::env::archive_image;
 use super::error::Error;
-use super::mysql::require_docker;
+use super::mysql::{require_docker, require_gzip, verify_gzip_magic};
 use super::ssh::{
     posix_quote, remote_bash, remote_dir_exists, resolve_remote_project_name, ssh_e_opt, SshSource,
 };
@@ -480,10 +482,255 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+pub fn snapshot_data_dir(snapshot_dir: &Path, item: &str) -> PathBuf {
+    snapshot_dir.join("data").join(item)
+}
+
+pub fn snapshot_volume_tar(snapshot_dir: &Path, item: &str) -> PathBuf {
+    snapshot_dir.join("volumes").join(format!("{item}.tar.gz"))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VolumeSource {
+    Tree { src: PathBuf },
+    Tar { tar: PathBuf },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VolumeRestore {
+    pub item: String,
+    pub dest: PathBuf,
+    pub source: VolumeSource,
+}
+
+impl VolumeRestore {
+    pub fn restore_log_line(&self) -> String {
+        match &self.source {
+            VolumeSource::Tree { src } => format!(
+                "Restoring bind mount {} from {}",
+                self.dest.display(),
+                src.display()
+            ),
+            VolumeSource::Tar { tar } => format!(
+                "Restoring {} from tar {}",
+                self.dest.display(),
+                tar.display()
+            ),
+        }
+    }
+
+    pub fn dry_run_line(&self) -> String {
+        match &self.source {
+            VolumeSource::Tree { src } => format!(
+                "DRY-RUN rsync {}/ {}/; chown 82:82",
+                src.display(),
+                self.dest.display()
+            ),
+            VolumeSource::Tar { tar } => {
+                format!(
+                    "DRY-RUN extract {} into {}",
+                    tar.display(),
+                    self.dest.display()
+                )
+            }
+        }
+    }
+}
+
+pub fn plan_bind_restore(
+    snapshot_dir: &Path,
+    data_root: &Path,
+    item: &str,
+) -> Result<VolumeRestore, Error> {
+    let dest = bind_item_dir(data_root, item);
+    let snapdir = snapshot_data_dir(snapshot_dir, item);
+    let tarin = snapshot_volume_tar(snapshot_dir, item);
+    if snapdir.is_dir() {
+        return Ok(VolumeRestore {
+            item: item.to_string(),
+            dest,
+            source: VolumeSource::Tree { src: snapdir },
+        });
+    }
+    if tarin.is_file() {
+        return Ok(VolumeRestore {
+            item: item.to_string(),
+            dest,
+            source: VolumeSource::Tar { tar: tarin },
+        });
+    }
+    Err(Error::fail(format!(
+        "No snapshot for '{item}' (missing {} and {})",
+        snapdir.display(),
+        tarin.display()
+    )))
+}
+
+pub fn execute_bind_restore(
+    op: &VolumeRestore,
+    archive_image: &str,
+    dry_run: bool,
+) -> Result<(), Error> {
+    println!("==> {}", op.restore_log_line());
+    if dry_run {
+        println!("==> {}", op.dry_run_line());
+        return Ok(());
+    }
+    match &op.source {
+        VolumeSource::Tree { src } => restore_tree(src, &op.dest, archive_image),
+        VolumeSource::Tar { tar } => restore_tar(tar, &op.dest, archive_image),
+    }
+}
+
+fn restore_tree(src: &Path, dest: &Path, archive_image: &str) -> Result<(), Error> {
+    let _ = fs::create_dir_all(dest);
+    if have_cmd("rsync") && dest.is_dir() && path_writable(dest) {
+        if rsync_local_trees(src, dest).is_ok() {
+            return chown_data_dir(dest, archive_image);
+        }
+    }
+    docker_copy_tree(src, dest, archive_image)
+}
+
+fn restore_tar(tar: &Path, dest: &Path, archive_image: &str) -> Result<(), Error> {
+    require_gzip()?;
+    verify_gzip_magic(tar)?;
+    gzip_test(tar)?;
+    require_docker()?;
+    let _ = fs::create_dir_all(dest);
+    let dest_abs = abs_path(dest);
+    let volumes_dir = tar
+        .parent()
+        .ok_or_else(|| Error::fail(format!("cannot find volumes dir for {}", tar.display())))?;
+    let volumes_abs = abs_path(volumes_dir);
+    let logical = tar
+        .file_name()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.strip_suffix(".tar.gz"))
+        .ok_or_else(|| Error::fail(format!("invalid volume archive name: {}", tar.display())))?;
+    let script = format!(
+        "set -eu\nfind /to -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +\ntar -C /to -xzf /from/{logical}.tar.gz\nchown -R 82:82 /to || true"
+    );
+    let status = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{dest_abs}:/to"),
+            "-v",
+            &format!("{volumes_abs}:/from:ro"),
+            archive_image,
+            "sh",
+            "-c",
+            &script,
+        ])
+        .status()
+        .map_err(|e| Error::fail(format!("failed to exec docker: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::fail(format!(
+            "Failed to extract {} into {}",
+            tar.display(),
+            dest.display()
+        )))
+    }
+}
+
+fn chown_data_dir(dest: &Path, archive_image: &str) -> Result<(), Error> {
+    fs::create_dir_all(dest)
+        .map_err(|e| Error::fail(format!("cannot create {}: {e}", dest.display())))?;
+    let local = Command::new("chown")
+        .args(["-R", "82:82"])
+        .arg(dest)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if matches!(local, Ok(s) if s.success()) {
+        return Ok(());
+    }
+    docker_chown(dest, archive_image)
+}
+
+fn docker_chown(dest: &Path, archive_image: &str) -> Result<(), Error> {
+    require_docker()?;
+    let dest_abs = abs_path(dest);
+    let status = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{dest_abs}:/to"),
+            archive_image,
+            "chown",
+            "-R",
+            "82:82",
+            "/to",
+        ])
+        .status()
+        .map_err(|e| Error::fail(format!("failed to exec docker: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::fail(format!(
+            "chown 82:82 failed for {}",
+            dest.display()
+        )))
+    }
+}
+
+fn docker_copy_tree(src: &Path, dest: &Path, archive_image: &str) -> Result<(), Error> {
+    require_docker()?;
+    let _ = fs::create_dir_all(dest);
+    let dest_abs = abs_path(dest);
+    let src_abs = abs_path(src);
+    let status = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{dest_abs}:/to"),
+            "-v",
+            &format!("{src_abs}:/from:ro"),
+            archive_image,
+            "sh",
+            "-c",
+            "set -eu; find /to -mindepth 1 -maxdepth 1 -exec rm -rf {} +; cp -a /from/. /to/; chown -R 82:82 /to || true",
+        ])
+        .status()
+        .map_err(|e| Error::fail(format!("failed to exec docker: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::fail(format!(
+            "Failed to copy {} into {}",
+            src.display(),
+            dest.display()
+        )))
+    }
+}
+
+fn path_writable(path: &Path) -> bool {
+    Command::new("test")
+        .arg("-w")
+        .arg(path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn abs_path(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(prefix: &str) -> PathBuf {
@@ -548,6 +795,67 @@ mod tests {
             fs::read_to_string(dest.join("nested/a.txt")).unwrap(),
             "hello"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn layout_helpers() {
+        let snap = Path::new("/snap");
+        assert_eq!(
+            snapshot_data_dir(snap, "media"),
+            PathBuf::from("/snap/data/media")
+        );
+        assert_eq!(
+            snapshot_volume_tar(snap, "media"),
+            PathBuf::from("/snap/volumes/media.tar.gz")
+        );
+        assert_eq!(
+            bind_item_dir(Path::new("/data"), "media"),
+            PathBuf::from("/data/media")
+        );
+    }
+
+    #[test]
+    fn prefers_data_tree_over_tar() {
+        let root = temp_dir("pref");
+        let snap = root.join("snap");
+        fs::create_dir_all(snap.join("data/media")).unwrap();
+        fs::create_dir_all(snap.join("volumes")).unwrap();
+        fs::write(snap.join("volumes/media.tar.gz"), b"x").unwrap();
+        let op = plan_bind_restore(&snap, &root.join("data-root"), "media").unwrap();
+        match &op.source {
+            VolumeSource::Tree { src } => assert_eq!(src, &snap.join("data/media")),
+            other => panic!("{other:?}"),
+        }
+        assert!(op.dry_run_line().contains("rsync"));
+        assert!(op.dry_run_line().contains("chown 82:82"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tar_when_data_tree_missing() {
+        let root = temp_dir("tar");
+        let snap = root.join("snap");
+        fs::create_dir_all(snap.join("volumes")).unwrap();
+        fs::write(snap.join("volumes/files.tar.gz"), b"x").unwrap();
+        let dest_root = root.join("data-root");
+        let op = plan_bind_restore(&snap, &dest_root, "files").unwrap();
+        match &op.source {
+            VolumeSource::Tar { tar } => assert_eq!(tar, &snap.join("volumes/files.tar.gz")),
+            other => panic!("{other:?}"),
+        }
+        assert!(op.dry_run_line().contains("extract"));
+        assert!(op.dry_run_line().contains("files.tar.gz"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_both_errors() {
+        let root = temp_dir("miss");
+        let err = plan_bind_restore(&root.join("snap"), &root.join("data"), "media").unwrap_err();
+        assert!(err.to_string().contains("No snapshot for 'media'"), "{err}");
+        assert!(err.to_string().contains("data/media"), "{err}");
+        assert!(err.to_string().contains("volumes/media.tar.gz"), "{err}");
         let _ = fs::remove_dir_all(&root);
     }
 }

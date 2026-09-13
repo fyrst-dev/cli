@@ -78,6 +78,14 @@ const LEAK_KEYS: &[&str] = &[
     "SYNC_SNAPSHOT_DIR",
     "SYNC_ALLOW_LIVE_RESTORE",
     "SYNC_ENV",
+    "SYNC_REWRITE_APP_URL",
+    "SYNC_REWRITE_URL_MAP",
+    "SYNC_POST_RESTORE_CMD",
+    "SYNC_ARCHIVE_IMAGE",
+    "SYNC_DATA_ROOT",
+    "IMAGE",
+    "APP_URL",
+    "SYNC_APP_URL",
 ];
 
 fn import(shop: &Path, extra: &[&str]) -> Output {
@@ -364,19 +372,6 @@ SYNC_ALLOW_LIVE_RESTORE=1
     let out = restore(shop.path(), &["--dry-run", "--data", "db"]);
     assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
     assert!(stderr(&out).contains("WARNING:"), "{}", stderr(&out));
-}
-
-#[test]
-fn restore_volumes_only_exits_2() {
-    let shop = TempShop::new("rst-vol");
-    shop.write_min_shop();
-    let out = restore(shop.path(), &["--dry-run", "--data", "media"]);
-    assert_eq!(out.status.code(), Some(2), "stderr={}", stderr(&out));
-    assert!(
-        stderr(&out).contains("bind-mount volume restore"),
-        "{}",
-        stderr(&out)
-    );
 }
 
 #[test]

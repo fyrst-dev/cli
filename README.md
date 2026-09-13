@@ -12,8 +12,11 @@ License: MIT.
 **Implemented:** `fyrst-cli shopware init-env` (shop-root `.env` after create
 + Flex) and `fyrst-cli shopware db import` — load a `.sql` or `.sql.gz`
 dump into this shop's database. shopware-cli has no import; that is the gap
-this CLI fills. `fyrst-cli shopware sync restore --data db` uses the same
-import module (`--snapshot-dir/db.sql.gz` or `db.sql`).
+this CLI fills. `fyrst-cli shopware sync restore` uses the same import module
+for `--data db` (`--snapshot-dir/db.sql.gz` or `db.sql`), restores bind-mount
+volumes from `--snapshot-dir/data/<item>/` (or `volumes/<item>.tar.gz`),
+stops/starts `web`/`worker`/`scheduler`, and runs opt-in
+`fyrst:sales-channel:rewrite-urls` via compose `web`.
 `fyrst-cli shopware release` — pull `IMAGE:IMAGE_TAG` and recreate the VPS
 Compose stack (never builds images).
 
@@ -31,12 +34,13 @@ dump.
 does not wrap or shell out to shopware-cli for dump. `--data db` on snapshot
 exits 2 with that instruction.
 
-**Still stub (exit 2):** bind-mount volume restore, and remaining `shopware`
-verbs (`sync sync`, `sync-local`, `backup`). Snapshot `--data db` still exits
-2 (points operators at shopware-cli; not a dump wrap).
+**Still stub (exit 2):** remaining `shopware` verbs (`sync sync`, `sync-local`,
+`backup`). Snapshot `--data db` still exits 2 (points operators at shopware-cli;
+not a dump wrap).
 
-This CLI does not reimplement dump or
-`fyrst:sales-channel:rewrite-urls`. Overlay scripts live in
+This CLI does not reimplement dump or the
+`fyrst:sales-channel:rewrite-urls` command itself (restore *calls* it via
+compose `web`). Overlay scripts live in
 [fyrst-dev/recipes](https://github.com/fyrst-dev/recipes) (`fyrst/shopware-cd`).
 The console command lives in [fyrst-dev/shopware-cd](https://github.com/fyrst-dev/shopware-cd).
 
@@ -108,7 +112,7 @@ fyrst-cli shopware release            # VPS compose pull + recreate
 fyrst-cli shopware rollback           # VPS rollback to .previous-tag
 fyrst-cli shopware db import          # SQL import (this is real)
 fyrst-cli shopware sync snapshot       # volumes; dump = shopware-cli
-fyrst-cli shopware sync restore        # DB path = same import module
+fyrst-cli shopware sync restore        # DB + volumes + opt-in rewrite
 fyrst-cli shopware sync sync
 fyrst-cli shopware sync-local
 fyrst-cli shopware backup backup
@@ -181,6 +185,9 @@ fyrst-cli shopware db import --file ./dump.sql
 
 # Same import via sync restore (looks for <snapshot-dir>/db.sql.gz)
 fyrst-cli shopware sync restore --data db --snapshot-dir /tmp/sw-snap --dry-run
+
+# Bind-mount volumes from snapshot data/<item>/ (or volumes/<item>.tar.gz)
+fyrst-cli shopware sync restore --data media --snapshot-dir /tmp/sw-snap --dry-run
 ```
 
 Behaviour (aligned with recipes `restore_db_local` / `restore_db_via_url`):
@@ -210,7 +217,8 @@ silently trash production.
 - **`db import`:** pass `--allow-live` or set `SYNC_ALLOW_LIVE_RESTORE=1`.
 - **`sync restore`:** same live detection as the overlay; override only with
   `SYNC_ALLOW_LIVE_RESTORE=1` (not `--allow-live`). Staging/playground/dev
-  do not need extra flags.
+  do not need extra flags. Opt-in URL rewrite after restore is **never**
+  allowed on live, even with `SYNC_ALLOW_LIVE_RESTORE=1`.
 
 Passwords (`MYSQL_PASSWORD`, `DATABASE_URL`) are never printed.
 
