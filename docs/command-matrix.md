@@ -27,7 +27,8 @@ Delegated tools:
 | `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync sync` | — | same flags | **implemented** (pull orchestration): rsync remote bind-mounts; DB imports an already-present dump (does **not** dump). Live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1` |
 | `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | **implemented** (VPS → local project-dev rsync; never DB; never `SHOPWARE_DATA_ROOT`) |
 | `deploy/backup-runtime.sh` backup | `fyrst-cli shopware backup backup` | `backup` | `--data`, `--dry-run` | **implemented** (volumes + operator `db.sql.gz`; **not** a dump wrap; live allowed) |
-| `deploy/backup-runtime.sh` prune / restore | `fyrst-cli shopware backup` | `prune`, `restore` | `--data`, `--dry-run`; restore also `--from`, `--i-understand-this-restores-this-host` | stub (exit 2) |
+| `deploy/backup-runtime.sh` prune | `fyrst-cli shopware backup prune` | — | `--data` (ignored; stamp-based), `--dry-run` | **implemented** (retention under `BACKUP_TARGET`; not a dump) |
+| `deploy/backup-runtime.sh` restore | `fyrst-cli shopware backup restore` | `restore` | `--data`, `--dry-run`, `--from`, `--i-understand-this-restores-this-host` | stub (exit 2) |
 
 `shopware sync` with no verb, `shopware backup` with no verb, and
 `shopware db` with no verb, require a subcommand (clap prints help, exit 2).
@@ -443,11 +444,50 @@ Divergence from overlay `backup-runtime.sh`: the overlay execs
    (same stamp cutoff as overlay `prune_artifacts`: delete
    `YYYYMMDDTHHMMSSZ` dirs older than `BACKUP_KEEP_DAYS` UTC days;
    `0` keeps forever; non-matching names are left alone). Standalone
-   `fyrst-cli shopware backup prune` remains a stub (#10).
+   `fyrst-cli shopware backup prune` is the same retention path.
 
 `--dry-run` prints the stamp path, volume copy plan, dump instruction (if
 db selected), manifest/checksum plan, and prune actions. It does not copy,
 dump, SSH, or delete.
+
+## Exact prune CLI
+
+```text
+fyrst-cli shopware backup prune [--data LIST] [--dry-run]
+```
+
+`--data` is accepted for overlay flag parity. Prune deletes **artifact
+directories by timestamp name**, not by `--data` subset.
+
+## `shopware backup prune` (implemented)
+
+Stamp-based retention under
+`$BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/`. Not a dump
+command and does not wrap `shopware-cli`. Creating artifacts is
+`shopware backup backup`.
+
+Resolves shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`),
+loads `.env` then `.env.prod` then `deploy/sync.env` then `deploy/backup.env`.
+Identity keys and `BACKUP_TARGET` / `BACKUP_KEEP_DAYS` / `BACKUP_SSH_KEY` /
+`BACKUP_SSH_PORT` from the process environment win when non-empty.
+Requires `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, and `BACKUP_TARGET`.
+
+1. Parse `BACKUP_TARGET` as a local path, `user@host:/path` / `host:/path`,
+   or `ssh://user@host:22/abs/path`. Missing `BACKUP_TARGET` fails with an
+   operator error (exit 1), not “not implemented”.
+2. `BACKUP_KEEP_DAYS` default 14. `0` logs that all artifacts are kept and
+   returns without listing or deleting.
+3. List names under the shop/env prefix. Delete those whose name matches
+   `YYYYMMDDTHHMMSSZ` **and** is older than the UTC cutoff (`stamp < now
+   minus keep days`, same string compare as overlay `date -u -d`). Names
+   that are not that stamp form are left alone. A stamp equal to the cutoff
+   is kept.
+4. `--dry-run` prints `rm -rf` targets and does not delete.
+5. SSH targets use `ssh -o BatchMode=yes -o ConnectTimeout=15` (`-p` from
+   `BACKUP_SSH_PORT` or the `ssh://` URL; optional `-i BACKUP_SSH_KEY`) and
+   remote `rm -rf`.
+
+Live is allowed (this is retention, not sync restore).
 
 ## Environment (not clap flags)
 
@@ -468,7 +508,7 @@ shop-root `.env`. Names match the overlay:
 | Sync-local | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_<ALIAS>_SSH_*`, `SYNC_<ALIAS>_DATA_ROOT` |
 | Sync pull | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_PATH`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_DATA_ROOT`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_SSH_*` / `SYNC_<ALIAS>_REMOTE_PATH` / `SYNC_<ALIAS>_DATA_ROOT` |
 | Sync rewrite | `SYNC_REWRITE_APP_URL`, `SYNC_REWRITE_URL_MAP`, `SYNC_APP_URL`, `SYNC_POST_RESTORE_CMD` |
-| Backup | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS`, `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`, `BACKUP_DB_DUMP`; restore later: `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
+| Backup | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS` (default 14, `0` = forever), `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`, `BACKUP_DB_DUMP`; restore later: `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
 
 ## Future wrappers (not done here)
 
