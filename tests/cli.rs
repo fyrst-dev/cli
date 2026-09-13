@@ -121,6 +121,27 @@ fn sync_help_lists_snapshot_restore_sync() {
 }
 
 #[test]
+fn backup_restore_help_lists_flags_and_does_not_wrap_dump() {
+    let help = stdout(&["shopware", "backup", "restore", "--help"]);
+    for needle in [
+        "--from",
+        "--data",
+        "--dry-run",
+        "--i-understand-this-restores-this-host",
+    ] {
+        assert!(
+            help.contains(needle),
+            "backup restore --help missing `{needle}`:\n{help}",
+        );
+    }
+    let lower = help.to_ascii_lowercase();
+    assert!(
+        !lower.contains("shopware-cli project dump") || help.contains("does not dump"),
+        "backup restore --help must not wrap dump:\n{help}",
+    );
+}
+
+#[test]
 fn backup_help_lists_backup_prune_restore() {
     let help = stdout(&["shopware", "backup", "--help"]);
     for needle in ["backup", "prune", "restore"] {
@@ -133,9 +154,8 @@ fn backup_help_lists_backup_prune_restore() {
 
 #[test]
 fn stubs_exit_2_with_not_implemented() {
-    let cases: &[&[&str]] = &[
-        &["shopware", "backup", "restore"],
-    ];
+    // All shopware verbs are implemented; keep the loop for future stubs.
+    let cases: &[&[&str]] = &[];
     for args in cases {
         let out = run(args);
         assert_eq!(

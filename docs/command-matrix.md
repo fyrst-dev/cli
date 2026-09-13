@@ -28,7 +28,7 @@ Delegated tools:
 | `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | **implemented** (VPS → local project-dev rsync; never DB; never `SHOPWARE_DATA_ROOT`) |
 | `deploy/backup-runtime.sh` backup | `fyrst-cli shopware backup backup` | `backup` | `--data`, `--dry-run` | **implemented** (volumes + operator `db.sql.gz`; **not** a dump wrap; live allowed) |
 | `deploy/backup-runtime.sh` prune | `fyrst-cli shopware backup prune` | — | `--data` (ignored; stamp-based), `--dry-run` | **implemented** (retention under `BACKUP_TARGET`; not a dump) |
-| `deploy/backup-runtime.sh` restore | `fyrst-cli shopware backup restore` | `restore` | `--data`, `--dry-run`, `--from`, `--i-understand-this-restores-this-host` | stub (exit 2) |
+| `deploy/backup-runtime.sh` restore | `fyrst-cli shopware backup restore` | `restore` | `--data`, `--dry-run`, `--from`, `--i-understand-this-restores-this-host` | **implemented** (fetch artifact; inner apply = sync restore module; no dump) |
 
 `shopware sync` with no verb, `shopware backup` with no verb, and
 `shopware db` with no verb, require a subcommand (clap prints help, exit 2).
@@ -177,6 +177,19 @@ fyrst-cli shopware sync sync --from live --skip-db --data media,files,thumbnail,
 `--from local` snapshots then restores the same host (pipeline check). Prefer
 `--from <live-alias>` on staging.
 
+## Exact backup restore CLI
+
+```text
+fyrst-cli shopware backup restore [--data LIST] [--dry-run] --from STAMP_OR_DIR \
+  --i-understand-this-restores-this-host
+```
+
+`--from` is required (artifact timestamp under
+`$BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/` or a directory path).
+Confirmation via `--i-understand-this-restores-this-host` **or**
+`BACKUP_CONFIRM_RESTORE=1`. This overwrites DB and bind mounts on **this host**.
+It is not `sync restore` (clone live→staging).
+
 ## `shopware db import` (implemented)
 
 Resolves shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`),
@@ -203,8 +216,33 @@ hostname equal to `live`, case-insensitive):
 | `sync restore` | refuse (overlay rules) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
 | `sync sync` | refuse (overlay `assert_not_live_restore`) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
 | opt-in rewrite after restore | refuse on live | **none** — `SYNC_ALLOW_LIVE_RESTORE=1` does not bypass |
+| `backup restore` | refuse when `SHOPWARE_DEPLOY_ENV=live` | `BACKUP_ALLOW_LIVE_RESTORE=1` (then inner apply sets `SYNC_ALLOW_LIVE_RESTORE=1`) |
 
-Staging / playground / dev need no extra flag.
+Staging / playground / dev need no extra live flag for backup restore (still
+need confirmation). Quarterly drill: restore onto staging, not live.
+
+## `shopware backup restore` (implemented)
+
+Disaster recovery from a backup artifact onto this host. Overlay
+`deploy/backup-runtime.sh restore`. fyrst-cli does **not** dump.
+
+1. Require `--from` and confirmation (`--i-understand-this-restores-this-host`
+   or `BACKUP_CONFIRM_RESTORE=1`).
+2. If `SHOPWARE_DEPLOY_ENV=live`, refuse unless `BACKUP_ALLOW_LIVE_RESTORE=1`.
+3. Fetch the artifact:
+   - `--from` directory path, or
+   - local `$BACKUP_TARGET/<shop>/<env>/<stamp>/`, or
+   - SSH `BACKUP_TARGET`: rsync into `<shop>/var/backup-work/restore-<stamp>`.
+4. Set `SYNC_ALLOW_LIVE_RESTORE=1` and apply via the **same restore module** as
+   `shopware sync restore` (`--data db` → existing import of `db.sql.gz` /
+   `db.sql`; volumes from artifact `data/<item>/` then `volumes/<item>.tar.gz`).
+5. `--dry-run` prints the fetch + inner restore plan and does not overwrite DB
+   or bind mounts.
+6. After a real restore, hint to rewrite sales-channel URLs if this is not a
+   same-host drill (rewrite itself is still refused on live).
+
+Loads `.env`, `.env.prod`, `deploy/sync.env`, then `deploy/backup.env`.
+Process-env `BACKUP_*` and shop identity keys win when non-empty.
 
 ## `shopware sync restore` (volumes + orchestration)
 
@@ -508,7 +546,7 @@ shop-root `.env`. Names match the overlay:
 | Sync-local | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_<ALIAS>_SSH_*`, `SYNC_<ALIAS>_DATA_ROOT` |
 | Sync pull | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_PATH`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_DATA_ROOT`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_SSH_*` / `SYNC_<ALIAS>_REMOTE_PATH` / `SYNC_<ALIAS>_DATA_ROOT` |
 | Sync rewrite | `SYNC_REWRITE_APP_URL`, `SYNC_REWRITE_URL_MAP`, `SYNC_APP_URL`, `SYNC_POST_RESTORE_CMD` |
-| Backup | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS` (default 14, `0` = forever), `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`, `BACKUP_DB_DUMP`; restore later: `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
+| Backup | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS` (default 14, `0` = forever), `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`, `BACKUP_DB_DUMP`, `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
 
 ## Future wrappers (not done here)
 

@@ -12,6 +12,7 @@
 //! project-dev checkout (never DB). `shopware backup backup` copies bind-mount
 //! trees (live allowed) and an operator-provided dump file.
 //! `shopware backup prune` is stamp-based retention under BACKUP_TARGET.
+//! `shopware backup restore` is disaster recovery onto this host.
 
 mod cli;
 mod shopware;

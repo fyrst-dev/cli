@@ -45,12 +45,16 @@ allowed. It does **not** dump.
 retention under `BACKUP_TARGET` (`BACKUP_KEEP_DAYS`, default 14, `0` = keep
 forever). Prune does not dump.
 
+**Also implemented:** `fyrst-cli shopware backup restore` — disaster recovery
+onto this host from a backup artifact (`--from`, confirmation required; live
+needs `BACKUP_ALLOW_LIVE_RESTORE=1`). Inner apply reuses sync restore. This
+CLI does not dump.
+
 **Dump is not in fyrst-cli.** Database dumps are owned completely by
 `shopware-cli project dump`. This CLI does not provide a dump command and
 does not wrap or shell out to shopware-cli for dump. `--data db` on snapshot
 exits 2 with that instruction.
 
-**Still stub (exit 2):** `shopware backup restore`.
 Snapshot `--data db` still exits 2 (points operators at shopware-cli; not a
 dump wrap).
 
@@ -134,7 +138,7 @@ fyrst-cli shopware sync sync           # pull: rsync + import (not dump)
 fyrst-cli shopware sync-local          # VPS → project-dev rsync (never DB)
 fyrst-cli shopware backup backup
 fyrst-cli shopware backup prune         # stamp-based retention
-fyrst-cli shopware backup restore
+fyrst-cli shopware backup restore      # DR onto this host (confirmation)
 ```
 
 | Overlay script | CLI |
@@ -241,6 +245,10 @@ silently trash production.
   only with `SYNC_ALLOW_LIVE_RESTORE=1` (not `--allow-live`). Staging/playground/dev
   do not need extra flags. Opt-in URL rewrite after restore/sync is **never**
   allowed on live, even with `SYNC_ALLOW_LIVE_RESTORE=1`.
+- **`backup restore`:** `SHOPWARE_DEPLOY_ENV=live` needs
+  `BACKUP_ALLOW_LIVE_RESTORE=1`. Confirmation is always required
+  (`--i-understand-this-restores-this-host` or `BACKUP_CONFIRM_RESTORE=1`).
+  Inner apply then sets `SYNC_ALLOW_LIVE_RESTORE=1`.
 
 Passwords (`MYSQL_PASSWORD`, `DATABASE_URL`) are never printed.
 
@@ -349,6 +357,30 @@ when the stamp is older than the UTC cutoff. Other names are left alone.
 `--data` is ignored (retention is stamp-based). `--dry-run` prints `rm -rf`
 targets only. SSH targets use `ssh -o BatchMode=yes`.
 
+## Backup restore
+
+Disaster recovery onto **this host** (not live→staging sync). `--from` is a
+stamp under `$BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/` or a
+directory path.
+
+```bash
+# Staging drill (print fetch + import/volume plan)
+fyrst-cli shopware backup restore --from 20260912T020000Z \
+  --i-understand-this-restores-this-host --dry-run
+
+# Apply (overwrites DB and bind mounts on this host)
+fyrst-cli shopware backup restore --from 20260912T020000Z \
+  --i-understand-this-restores-this-host
+
+# Live DR only
+BACKUP_ALLOW_LIVE_RESTORE=1 fyrst-cli shopware backup restore --from 20260912T020000Z \
+  --i-understand-this-restores-this-host
+```
+
+`--data db` uses the existing import module (`db.sql.gz` / `db.sql` in the
+artifact). fyrst-cli does not dump. SSH `BACKUP_TARGET` rsyncs into
+`var/backup-work/restore-<stamp>` then restores.
+
 ## Build
 
 For local development (also see [Install](#install) for release binaries):
@@ -362,6 +394,7 @@ cargo run -- shopware release --help
 cargo run -- shopware rollback --help
 cargo run -- shopware sync-local --help
 cargo run -- shopware backup prune --help
+cargo run -- shopware backup restore --help
 cargo test
 ```
 

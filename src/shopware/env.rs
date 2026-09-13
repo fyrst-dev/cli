@@ -31,6 +31,8 @@ pub const BACKUP_PRESET_KEYS: &[&str] = &[
     "BACKUP_SSH_KEY",
     "BACKUP_SSH_PORT",
     "BACKUP_DB_DUMP",
+    "BACKUP_CONFIRM_RESTORE",
+    "BACKUP_ALLOW_LIVE_RESTORE",
 ];
 
 const ENV_FILES: &[&str] = &[".env", ".env.prod", "deploy/sync.env"];
@@ -140,6 +142,10 @@ impl ShopEnv {
             .get(key)
             .map(String::as_str)
             .filter(|s| !s.is_empty())
+    }
+
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.vars.insert(key.into(), value.into());
     }
 
     pub fn merge_env_file(&mut self, path: &Path) -> Result<(), Error> {
@@ -287,6 +293,14 @@ pub fn require_deploy_env(env: &ShopEnv) -> Result<String, Error> {
 }
 
 pub const DEFAULT_ARCHIVE_IMAGE: &str = "alpine:3.20";
+
+/// Overlay `vps_env_truthy`: `1` / `true` / `yes` / `on` (case-insensitive).
+pub fn env_truthy(value: Option<&str>) -> bool {
+    match value.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        None => false,
+    }
+}
 
 /// `(project_name, derived_from_shop_id_and_env)`.
 pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
@@ -691,6 +705,18 @@ COMPOSE_PROFILES=redis
             resolve_snapshot_dir(Some("/abs/s"), &env, Path::new("/shop")),
             PathBuf::from("/abs/s")
         );
+    }
+
+    #[test]
+    fn env_truthy_matches_overlay() {
+        assert!(env_truthy(Some("1")));
+        assert!(env_truthy(Some("true")));
+        assert!(env_truthy(Some("YES")));
+        assert!(env_truthy(Some("On")));
+        assert!(!env_truthy(Some("0")));
+        assert!(!env_truthy(Some("false")));
+        assert!(!env_truthy(Some("")));
+        assert!(!env_truthy(None));
     }
 
     #[test]

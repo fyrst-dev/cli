@@ -32,6 +32,7 @@ sync sync = pull: rsync remote bind-mounts + import of an already-present dump (
 sync-local = VPS → local project-dev rsync (never DB; not SHOPWARE_DATA_ROOT).
 Backup = fyrst-cli shopware backup backup (volumes + operator db.sql.gz; live allowed).
 Backup prune = stamp-based retention under BACKUP_TARGET (BACKUP_KEEP_DAYS).
+backup restore = disaster recovery onto this host (confirmation required).
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
@@ -55,6 +56,7 @@ opt-in rewrite via compose web). \
 `shopware backup backup` copies bind-mount trees into BACKUP_TARGET (live allowed) \
 and never wraps dump. \
 `shopware backup prune` deletes stamp-named artifacts under BACKUP_TARGET. \
+`shopware backup restore` is disaster recovery onto this host (confirmation required). \
 Other shopware subcommands still exit 2 with \"not implemented\".",
     arg_required_else_help = true,
     subcommand_required = true,
@@ -101,7 +103,9 @@ IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).\n\n\
 BACKUP_TARGET; it is allowed on live. \
 `backup prune` is implemented: stamp-based retention under BACKUP_TARGET \
 (BACKUP_KEEP_DAYS, default 14, 0 = keep forever). \
-`backup restore` is still a stub.",
+`backup restore` fetches an artifact (`--from`) and applies it onto this host. It is not \
+live→staging sync. Confirmation is required (`--i-understand-this-restores-this-host` \
+or BACKUP_CONFIRM_RESTORE=1). Live needs BACKUP_ALLOW_LIVE_RESTORE=1.",
     after_help = SHOPWARE_COMMAND_TREE
 )]
 pub struct ShopwareArgs {
@@ -298,7 +302,7 @@ pub enum BackupCommand {
     Backup(BackupOpArgs),
     /// Delete stamp-named artifacts older than BACKUP_KEEP_DAYS (also runs after backup)
     Prune(BackupOpArgs),
-    /// Restore one artifact onto this host (disaster recovery)
+    /// Restore one artifact onto this host (disaster recovery; not sync)
     Restore(BackupRestoreArgs),
 }
 
@@ -607,6 +611,34 @@ mod tests {
             }) => {
                 assert_eq!(op.data.as_deref(), Some("db"));
                 assert!(op.dry_run);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn backup_restore_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "backup",
+            "restore",
+            "--from",
+            "20260912T020000Z",
+            "--data",
+            "db",
+            "--dry-run",
+            "--i-understand-this-restores-this-host",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Backup(BackupCommand::Restore(op)),
+            }) => {
+                assert_eq!(op.from.as_deref(), Some("20260912T020000Z"));
+                assert_eq!(op.common.data.as_deref(), Some("db"));
+                assert!(op.common.dry_run);
+                assert!(op.confirm_restore);
             }
             other => panic!("unexpected parse: {other:?}"),
         }

@@ -97,18 +97,43 @@ pub fn plan(
     let compose_dir = resolve_compose_dir(process_env, cwd)?;
     let compose_dir = fs::canonicalize(&compose_dir).unwrap_or(compose_dir);
     let env = ShopEnv::load(compose_dir.clone(), process_env)?;
-    let shop_id = require_shop_id(&env)?;
     let selection = normalize_data(args.data.as_deref(), args.skip_db, args.skip_volumes)?;
     let snapshot_dir = resolve_snapshot_dir(args.snapshot_dir.as_deref(), &env, &compose_dir);
+    plan_with_env(&env, cwd, &snapshot_dir, &selection, args.dry_run)
+}
 
-    let signals = LiveSignals::from_shop(&env);
+/// Inner apply used by `shopware sync restore` and `shopware backup restore`.
+pub fn apply_from_env(
+    env: &ShopEnv,
+    cwd: &Path,
+    snapshot_dir: &Path,
+    selection: &DataSelection,
+    dry_run: bool,
+) -> Result<(), Error> {
+    let plan = plan_with_env(env, cwd, snapshot_dir, selection, dry_run)?;
+    execute(&plan)
+}
+
+pub fn plan_with_env(
+    env: &ShopEnv,
+    cwd: &Path,
+    snapshot_dir: &Path,
+    selection: &DataSelection,
+    dry_run: bool,
+) -> Result<RestorePlan, Error> {
+    let compose_dir = env.compose_dir.clone();
+    let shop_id = require_shop_id(env)?;
+    let snapshot_dir = snapshot_dir.to_path_buf();
+    let selection = selection.clone();
+
+    let signals = LiveSignals::from_shop(env);
     let live_warning = assert_not_live(&signals, LivePolicy::SyncRestore)?;
-    let rewrite_opt_in = rewrite_requested(&env);
+    let rewrite_opt_in = rewrite_requested(env);
     if rewrite_opt_in {
         assert_not_live_rewrite(&signals)?;
     }
 
-    if !args.dry_run && !snapshot_dir.is_dir() {
+    if !dry_run && !snapshot_dir.is_dir() {
         return Err(Error::fail(format!(
             "Snapshot directory not found: {}",
             snapshot_dir.display()
@@ -116,18 +141,18 @@ pub fn plan(
     }
 
     let data_root = if !selection.volumes.is_empty() {
-        Some(resolve_data_root(&env)?)
+        Some(resolve_data_root(env)?)
     } else {
-        resolve_data_root(&env).ok()
+        resolve_data_root(env).ok()
     };
 
     let import = if selection.want_db {
         let file = find_snapshot_dump(&snapshot_dir)?;
         Some(import::plan_with_env(
-            &env,
+            env,
             cwd,
             &file,
-            args.dry_run,
+            dry_run,
             LivePolicy::SyncRestore,
         )?)
     } else {
@@ -140,8 +165,8 @@ pub fn plan(
         RewriteAction::SkipNoDb
     } else {
         RewriteAction::Run {
-            docker_args: compose_rewrite_args(&env, &compose_dir, args.dry_run),
-            log_line: rewrite_log_line(&env, &compose_dir, args.dry_run),
+            docker_args: compose_rewrite_args(env, &compose_dir, dry_run),
+            log_line: rewrite_log_line(env, &compose_dir, dry_run),
         }
     };
 
@@ -153,7 +178,7 @@ pub fn plan(
     }
 
     let parsed_url = env.get("DATABASE_URL").and_then(parse_database_url);
-    let secrets = collect_env_secrets(&env, parsed_url.as_ref());
+    let secrets = collect_env_secrets(env, parsed_url.as_ref());
     let compose_files = existing_compose_files(&compose_dir);
 
     Ok(RestorePlan {
@@ -165,13 +190,13 @@ pub fn plan(
         snapshot_dir,
         data_root,
         selection,
-        dry_run: args.dry_run,
+        dry_run,
         live_warning: if import.is_none() { live_warning } else { None },
         import,
         rewrite,
         rewrite_requested: rewrite_opt_in,
         volumes,
-        archive_image: archive_image(&env),
+        archive_image: archive_image(env),
         image: env.get("IMAGE").map(str::to_string),
         app_url: env
             .get("SYNC_APP_URL")

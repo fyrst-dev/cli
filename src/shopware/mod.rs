@@ -2,9 +2,9 @@
 //!
 //! Database **dump** is owned by `shopware-cli project dump` — this CLI never
 //! wraps it. Database **import** is `fyrst-cli shopware db import` (also used
-//! by `shopware sync restore --data db` and `shopware sync sync` when a dump
-//! is already present). `init-env` finishes shop-root `.env`
-//! (recipes `deploy/init-env.sh`). VPS **release** is
+//! by `shopware sync restore --data db`, `shopware sync sync` when a dump is
+//! already present, and `shopware backup restore`). `init-env` finishes
+//! shop-root `.env` (recipes `deploy/init-env.sh`). VPS **release** is
 //! `fyrst-cli shopware release`. **Rollback** is
 //! `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`). `sync snapshot`
 //! copies bind-mount trees (not a dump). `sync restore` also restores
@@ -13,11 +13,12 @@
 //! `shopware sync-local` rsyncs VPS upload trees into a local project-dev
 //! checkout (never DB). `shopware backup backup` copies bind-mount trees and
 //! an operator-provided dump file (live allowed). `shopware backup prune`
-//! deletes stamp-named artifacts under BACKUP_TARGET. Other verbs stay stubs.
-//! See docs/ADR-0001-shopware-namespace.md.
+//! deletes stamp-named artifacts under BACKUP_TARGET. `shopware backup restore`
+//! is disaster recovery onto this host. See docs/ADR-0001-shopware-namespace.md.
 
 mod app;
 mod backup;
+mod backup_restore;
 mod compose;
 mod data;
 mod env;
@@ -116,13 +117,12 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
                 e.exit_code()
             }
         },
-        ShopwareCommand::Backup(BackupCommand::Restore(_)) => {
-            not_implemented("shopware backup restore")
-        }
+        ShopwareCommand::Backup(BackupCommand::Restore(op)) => match backup_restore::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
     }
-}
-
-fn not_implemented(command: &str) -> ExitCode {
-    eprintln!("not implemented: {command}");
-    ExitCode::from(2)
 }
