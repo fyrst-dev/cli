@@ -11,6 +11,7 @@
 //! (does not dump). `shopware sync-local` rsyncs VPS upload trees into a local
 //! project-dev checkout (never DB). `shopware backup backup` copies bind-mount
 //! trees (live allowed) and an operator-provided dump file.
+//! `shopware backup prune` is stamp-based retention under BACKUP_TARGET.
 
 mod cli;
 mod shopware;

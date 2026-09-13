@@ -99,6 +99,16 @@ impl ShopEnv {
         Self::load_files(compose_dir, process, SYNC_LOCAL_ENV_FILES, IDENTITY_KEYS)
     }
 
+    /// `.env` / `.env.prod` / `deploy/sync.env` then `deploy/backup.env` with BACKUP_* presets.
+    pub fn load_backup(
+        compose_dir: PathBuf,
+        process: &HashMap<String, String>,
+    ) -> Result<Self, Error> {
+        let mut env = Self::load(compose_dir, process)?;
+        env.load_backup_overlay(process)?;
+        Ok(env)
+    }
+
     fn load_files(
         compose_dir: PathBuf,
         process: &HashMap<String, String>,

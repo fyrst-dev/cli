@@ -37,12 +37,20 @@ trees into a local `shopware-cli` project-dev checkout (`./public/media/`,
 remote bind-mounts onto this host and import an already-present dump (it does
 **not** dump).
 
+**Also implemented:** `fyrst-cli shopware backup backup` — copies bind-mount
+trees (and an operator-provided `db.sql.gz`) into `BACKUP_TARGET`. Live is
+allowed. It does **not** dump.
+
+**Also implemented:** `fyrst-cli shopware backup prune` — stamp-based
+retention under `BACKUP_TARGET` (`BACKUP_KEEP_DAYS`, default 14, `0` = keep
+forever). Prune does not dump.
+
 **Dump is not in fyrst-cli.** Database dumps are owned completely by
 `shopware-cli project dump`. This CLI does not provide a dump command and
 does not wrap or shell out to shopware-cli for dump. `--data db` on snapshot
 exits 2 with that instruction.
 
-**Still stub (exit 2):** remaining `shopware` verbs (`backup`).
+**Still stub (exit 2):** `shopware backup restore`.
 Snapshot `--data db` still exits 2 (points operators at shopware-cli; not a
 dump wrap).
 
@@ -125,7 +133,7 @@ fyrst-cli shopware sync restore        # DB + volumes + opt-in rewrite
 fyrst-cli shopware sync sync           # pull: rsync + import (not dump)
 fyrst-cli shopware sync-local          # VPS → project-dev rsync (never DB)
 fyrst-cli shopware backup backup
-fyrst-cli shopware backup prune
+fyrst-cli shopware backup prune         # stamp-based retention
 fyrst-cli shopware backup restore
 ```
 
@@ -146,6 +154,7 @@ fyrst-cli shopware db import --help
 fyrst-cli shopware release --help
 fyrst-cli shopware rollback --help
 fyrst-cli shopware sync-local --help
+fyrst-cli shopware backup prune --help
 ```
 
 ## Dump (shopware-cli only)
@@ -319,6 +328,27 @@ shopware-cli project console cache:clear
 
 See [docs/command-matrix.md](docs/command-matrix.md).
 
+## Backup prune
+
+Stamp-based retention. Not a dump. Requires `BACKUP_TARGET` (local path or
+SSH) plus `SHOPWARE_SHOP_ID` and `SHOPWARE_DEPLOY_ENV`.
+
+```bash
+# Preview deletions (does not dump, copy, or delete)
+fyrst-cli shopware backup prune --dry-run
+
+# Delete stamp dirs older than BACKUP_KEEP_DAYS (default 14)
+fyrst-cli shopware backup prune
+
+# Keep forever
+BACKUP_KEEP_DAYS=0 fyrst-cli shopware backup prune
+```
+
+Deletes `$BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/YYYYMMDDTHHMMSSZ/`
+when the stamp is older than the UTC cutoff. Other names are left alone.
+`--data` is ignored (retention is stamp-based). `--dry-run` prints `rm -rf`
+targets only. SSH targets use `ssh -o BatchMode=yes`.
+
 ## Build
 
 For local development (also see [Install](#install) for release binaries):
@@ -331,6 +361,7 @@ cargo run -- shopware db import --help
 cargo run -- shopware release --help
 cargo run -- shopware rollback --help
 cargo run -- shopware sync-local --help
+cargo run -- shopware backup prune --help
 cargo test
 ```
 

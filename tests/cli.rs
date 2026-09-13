@@ -134,7 +134,6 @@ fn backup_help_lists_backup_prune_restore() {
 #[test]
 fn stubs_exit_2_with_not_implemented() {
     let cases: &[&[&str]] = &[
-        &["shopware", "backup", "prune"],
         &["shopware", "backup", "restore"],
     ];
     for args in cases {

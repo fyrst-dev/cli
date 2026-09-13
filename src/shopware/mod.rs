@@ -12,8 +12,9 @@
 //! pulls bind-mounts over SSH and imports an existing dump (does not dump).
 //! `shopware sync-local` rsyncs VPS upload trees into a local project-dev
 //! checkout (never DB). `shopware backup backup` copies bind-mount trees and
-//! an operator-provided dump file (live allowed). Other verbs stay stubs. See
-//! docs/ADR-0001-shopware-namespace.md.
+//! an operator-provided dump file (live allowed). `shopware backup prune`
+//! deletes stamp-named artifacts under BACKUP_TARGET. Other verbs stay stubs.
+//! See docs/ADR-0001-shopware-namespace.md.
 
 mod app;
 mod backup;
@@ -108,9 +109,13 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
                 e.exit_code()
             }
         },
-        ShopwareCommand::Backup(BackupCommand::Prune(_)) => {
-            not_implemented("shopware backup prune")
-        }
+        ShopwareCommand::Backup(BackupCommand::Prune(op)) => match prune::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
         ShopwareCommand::Backup(BackupCommand::Restore(_)) => {
             not_implemented("shopware backup restore")
         }
