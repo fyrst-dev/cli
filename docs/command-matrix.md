@@ -25,7 +25,7 @@ Delegated tools:
 | `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync snapshot` | — | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **volumes implemented** (bind-mount trees → `--snapshot-dir/data/<item>/`; named-volume tar fallback). **Not a dump command:** `--data db` exits 2 and tells operators to run `shopware-cli project dump` |
 | `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync restore` | — | same flags | **implemented**: DB via same import module; bind-mount volumes from `data/<item>/` or `volumes/<item>.tar.gz`; stop/start `web`/`worker`/`scheduler`; opt-in rewrite via compose `web`; live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1`; rewrite never on live |
 | `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync sync` | — | same flags | stub (exit 2) |
-| `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | stub (exit 2) |
+| `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | **implemented** (VPS → local project-dev rsync; never DB; never `SHOPWARE_DATA_ROOT`) |
 | `deploy/backup-runtime.sh` | `fyrst-cli shopware backup` | `backup`, `prune`, `restore` | `--data`, `--dry-run`; restore also `--from`, `--i-understand-this-restores-this-host` | stub (exit 2) |
 
 `shopware sync` with no verb, `shopware backup` with no verb, and
@@ -256,6 +256,60 @@ the overlay snapshot script (that would dump). Does not dump on the remote.
 
 Object storage (S3) is out of scope. Dump remains shopware-cli.
 
+## Exact sync-local CLI
+
+```text
+fyrst-cli shopware sync-local [--from ALIAS] [--data LIST] [--remote-data-root PATH] [--delete] [--dry-run]
+```
+
+## `shopware sync-local` (implemented)
+
+Pull live VPS upload trees into a **laptop `shopware-cli` project-dev**
+checkout. Matches recipes `deploy/sync-runtime-local.sh`. This command
+**never** restores the database and **never** writes into local
+`SHOPWARE_DATA_ROOT` / `SYNC_DATA_ROOT` (those are VPS bind-mount roots).
+VPS→VPS including DB is `shopware sync sync`, not this command.
+
+Default `--from` is `live`. Default `--data` is
+`media,files,thumbnail,theme,sitemap` (`all` is **not** db).
+
+Path remap (remote `$REMOTE_DATA_ROOT` → local shopware-cli project tree):
+
+| Remote | Local |
+| --- | --- |
+| `media/` | `./public/media/` |
+| `files/` | `./files/` |
+| `thumbnail/` | `./public/thumbnail/` |
+| `theme/` | `./public/theme/` |
+| `sitemap/` | `./public/sitemap/` |
+
+1. Resolve shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`).
+   Require `public/` or `composer.json`.
+2. Load shop-root `.env` then `deploy/sync.env` if present (identity keys from
+   the process environment win when non-empty). Does not load `.env.prod`.
+3. Remote root: `--remote-data-root` / `SYNC_REMOTE_DATA_ROOT` /
+   per-alias `SYNC_<ALIAS>_DATA_ROOT`, else
+   `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SYNC_SOURCE_ENV` with
+   `SYNC_SOURCE_ENV` default `live` and `SHOPWARE_DATA_BASE` default
+   `/var/lib/shopware/data`. `SHOPWARE_SHOP_ID` is required unless an
+   explicit remote root is set.
+4. SSH: BatchMode, no password prompts. Host/user/port/key from
+   `SYNC_SSH_*` / `SYNC_<ALIAS>_SSH_*` (host falls back to `--from`).
+5. `--data db` / `database` / `mysql` is refused (dump/import separately:
+   `shopware-cli project dump` + `fyrst-cli shopware db import`).
+   `--data mysql_data` / `redis_data` refused.
+6. `--delete` is opt-in (`rsync --delete`). Default keeps extra local files.
+   rsync is `-azH` and **omits `--numeric-ids`** so files are owned by the
+   local user, not VPS uid 82.
+7. `--dry-run` prints each `host:remote/item/ → ./public/…` (or `./files/`)
+   mapping and the rsync line; skips SSH probe / copy. Still requires
+   `rsync` and `ssh` on PATH.
+8. Warns if the checkout directory is named `live`. After success (and
+   dry-run): reminder `shopware-cli project console cache:clear` (not
+   implemented here).
+
+Requires `rsync` and an OpenSSH `ssh` client.
+
 ## Environment (not clap flags)
 
 Scripts and this CLI read shop identity and secrets from the environment /
@@ -272,6 +326,7 @@ shop-root `.env`. Names match the overlay:
 | Release | `IMAGE`, `IMAGE_TAG` (release / `.env`; **ignored on rollback**), `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |
 | Rollback | `.previous-tag` is the only `IMAGE_TAG`; same optional env as release except `ROLLBACK_ON_SMOKE_FAIL` |
 | Snapshot volumes | `SYNC_DATA_ROOT`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_REMOTE_PATH`, `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_*` |
+| Sync-local | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_<ALIAS>_SSH_*`, `SYNC_<ALIAS>_DATA_ROOT` |
 | Sync (future) | other `SYNC_*` (cron pull) |
 | Backup (future) | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS`, `BACKUP_SSH_KEY`, `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
 
@@ -281,6 +336,7 @@ When implemented, remaining verbs should exec (or source-equivalent) the
 overlay script with the parsed argv, rather than re-coding rewrite / rsync in
 Rust. `sync restore` volumes/orchestration already match the overlay in this
 CLI (rsync + compose `web` console rewrite); do not reimplement rewrite in SQL.
+`db import` and `sync-local` are in-process (MySQL client; rsync/ssh).
 Recipe and `shopware-cd` product code stay out of this repo. Recipe bash
 wrappers are **not** switched to `fyrst-cli` in this change. Dump remains
 shopware-cli even after wrappers land. Rollback reuses the release

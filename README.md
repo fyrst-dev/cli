@@ -29,14 +29,18 @@ only after success.
 `--snapshot-dir/data/<item>/` (local and remote SSH `--from`). It does **not**
 dump.
 
+**Also implemented:** `fyrst-cli shopware sync-local` — rsync VPS upload
+trees into a local `shopware-cli` project-dev checkout (`./public/media/`,
+`./files/`, …). Never the database. Never local `SHOPWARE_DATA_ROOT`.
+
 **Dump is not in fyrst-cli.** Database dumps are owned completely by
 `shopware-cli project dump`. This CLI does not provide a dump command and
 does not wrap or shell out to shopware-cli for dump. `--data db` on snapshot
 exits 2 with that instruction.
 
-**Still stub (exit 2):** remaining `shopware` verbs (`sync sync`, `sync-local`,
-`backup`). Snapshot `--data db` still exits 2 (points operators at shopware-cli;
-not a dump wrap).
+**Still stub (exit 2):** remaining `shopware` verbs (`sync sync`, `backup`).
+Snapshot `--data db` still exits 2 (points operators at shopware-cli; not a
+dump wrap).
 
 This CLI does not reimplement dump or the
 `fyrst:sales-channel:rewrite-urls` command itself (restore *calls* it via
@@ -100,8 +104,9 @@ Requires a Rust toolchain (edition 2021).
 
 Docker is still required at runtime for `shopware db import` (Compose `mysql`
 exec, or a one-shot mysql/mariadb client container) and for `shopware release`
-/ `shopware rollback` (Compose pull + recreate). Installing this binary does
-not replace Docker.
+/ `shopware rollback` (Compose pull + recreate). `shopware sync-local` needs
+`rsync` and an OpenSSH `ssh` client (BatchMode; no password prompts).
+Installing this binary does not replace Docker.
 Dump stays with `shopware-cli project dump`; fyrst-cli does not dump.
 
 ## Command tree
@@ -114,7 +119,7 @@ fyrst-cli shopware db import          # SQL import (this is real)
 fyrst-cli shopware sync snapshot       # volumes; dump = shopware-cli
 fyrst-cli shopware sync restore        # DB + volumes + opt-in rewrite
 fyrst-cli shopware sync sync
-fyrst-cli shopware sync-local
+fyrst-cli shopware sync-local          # VPS → project-dev rsync (never DB)
 fyrst-cli shopware backup backup
 fyrst-cli shopware backup prune
 fyrst-cli shopware backup restore
@@ -136,6 +141,7 @@ fyrst-cli shopware init-env --help
 fyrst-cli shopware db import --help
 fyrst-cli shopware release --help
 fyrst-cli shopware rollback --help
+fyrst-cli shopware sync-local --help
 ```
 
 ## Dump (shopware-cli only)
@@ -280,6 +286,32 @@ non-zero. Optional env matches release: `COMPOSE_PROFILES`, `SMOKE_URL`,
 rollout (and smoke, if `SMOKE_URL` is set). Never builds images or compiles
 themes/assets.
 
+## sync-local (VPS → laptop project-dev)
+
+Run from the shop checkout (directory with `.env` + `public/` or
+`composer.json`), or set `COMPOSE_DIR`. Pulls remote bind-mount trees into
+**project-tree** paths. Does not restore the database. Does not write into
+`SHOPWARE_DATA_ROOT`.
+
+```bash
+# Print mappings; do not copy
+fyrst-cli shopware sync-local --dry-run
+
+# Default --from live; default --data media,files,thumbnail,theme,sitemap
+fyrst-cli shopware sync-local --from live --data all
+
+fyrst-cli shopware sync-local --from live --data media,files
+fyrst-cli shopware sync-local --from live --data all --delete
+```
+
+`--data db` is refused. After a successful pull:
+
+```bash
+shopware-cli project console cache:clear
+```
+
+See [docs/command-matrix.md](docs/command-matrix.md).
+
 ## Build
 
 For local development (also see [Install](#install) for release binaries):
@@ -291,6 +323,7 @@ cargo run -- shopware init-env --help
 cargo run -- shopware db import --help
 cargo run -- shopware release --help
 cargo run -- shopware rollback --help
+cargo run -- shopware sync-local --help
 cargo test
 ```
 

@@ -7,8 +7,9 @@
 //! `fyrst-cli shopware release`. **Rollback** is
 //! `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`). `sync snapshot`
 //! copies bind-mount trees (not a dump). `sync restore` also restores
-//! bind-mount volumes and opt-in rewrite via compose `web`. Other verbs stay
-//! stubs. See docs/ADR-0001-shopware-namespace.md.
+//! bind-mount volumes and opt-in rewrite via compose `web`. `shopware sync-local`
+//! rsyncs VPS upload trees into a local project-dev checkout (never DB). Other
+//! verbs stay stubs. See docs/ADR-0001-shopware-namespace.md.
 
 mod compose;
 mod data;
@@ -26,6 +27,7 @@ mod rollback;
 mod rollout;
 mod snapshot;
 mod ssh;
+mod sync_local;
 mod volumes;
 
 use crate::cli::{BackupCommand, DbCommand, ShopwareArgs, ShopwareCommand, SyncCommand};
@@ -76,7 +78,13 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
             }
         },
         ShopwareCommand::Sync(SyncCommand::Sync(_)) => not_implemented("shopware sync sync"),
-        ShopwareCommand::SyncLocal(_) => not_implemented("shopware sync-local"),
+        ShopwareCommand::SyncLocal(op) => match sync_local::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
         ShopwareCommand::Backup(BackupCommand::Backup(_)) => {
             not_implemented("shopware backup backup")
         }
