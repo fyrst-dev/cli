@@ -17,9 +17,8 @@ pub struct BackupLock {
 pub fn acquire(compose_dir: &Path) -> Result<BackupLock, Error> {
     let lock_path = compose_dir.join("var/backup-runtime.lock");
     if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            Error::fail(format!("cannot create {}: {e}", parent.display()))
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| Error::fail(format!("cannot create {}: {e}", parent.display())))?;
     }
     let file = OpenOptions::new()
         .create(true)
