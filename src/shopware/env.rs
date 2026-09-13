@@ -25,11 +25,37 @@ const IDENTITY_KEYS: &[&str] = &[
 
 const ENV_FILES: &[&str] = &[".env", ".env.prod", "deploy/sync.env"];
 
+/// VPS release/rollback load `.env` then `.env.prod` only (no `deploy/sync.env`).
+const VPS_ENV_FILES: &[&str] = &[".env", ".env.prod"];
+
+/// CI / process-env keys that win over `.env` after the file load (non-empty).
+const VPS_PROCESS_WINS: &[&str] = &[
+    "SYNC_ENV",
+    "IMAGE",
+    "IMAGE_TAG",
+    "SYNC_DATA_ROOT",
+    "SHOPWARE_SHOP_ID",
+    "SHOPWARE_DEPLOY_ENV",
+    "COMPOSE_PROJECT_NAME",
+    "SHOPWARE_DATA_ROOT",
+    "SHOPWARE_DATA_BASE",
+    "SYNC_SOURCE_ENV",
+    "SYNC_REMOTE_DATA_ROOT",
+    "SMOKE_URL",
+    "COMPOSE_PROFILES",
+    "ROLLBACK_ON_SMOKE_FAIL",
+    "SKIP_PULL",
+    "PULL_POLICY",
+];
+
 pub const COMPOSE_FILES: &[&str] = &[
     "deploy/compose.yaml",
     "deploy/compose.prod.yaml",
     "deploy/compose.vps.yaml",
 ];
+
+/// Overlay `DEFAULT_DATA_BASE` (`deploy/lib/identity.sh`).
+pub const DEFAULT_DATA_BASE: &str = "/var/lib/shopware/data";
 
 pub struct ShopEnv {
     pub compose_dir: PathBuf,
@@ -38,8 +64,26 @@ pub struct ShopEnv {
 
 impl ShopEnv {
     pub fn load(compose_dir: PathBuf, process: &HashMap<String, String>) -> Result<Self, Error> {
+        Self::load_files(compose_dir, process, ENV_FILES, IDENTITY_KEYS)
+    }
+
+    /// Overlay `vps_load_shop_env` + `vps_restore_cli_env`: `.env` / `.env.prod`,
+    /// then non-empty process `IMAGE` / `IMAGE_TAG` (and other VPS knobs) win.
+    pub fn load_vps(
+        compose_dir: PathBuf,
+        process: &HashMap<String, String>,
+    ) -> Result<Self, Error> {
+        Self::load_files(compose_dir, process, VPS_ENV_FILES, VPS_PROCESS_WINS)
+    }
+
+    fn load_files(
+        compose_dir: PathBuf,
+        process: &HashMap<String, String>,
+        files: &[&str],
+        process_wins: &[&str],
+    ) -> Result<Self, Error> {
         let mut vars = process.clone();
-        for rel in ENV_FILES {
+        for rel in files {
             let path = compose_dir.join(rel);
             if path.is_file() {
                 let contents = fs::read_to_string(&path)
@@ -49,7 +93,7 @@ impl ShopEnv {
                 }
             }
         }
-        for key in IDENTITY_KEYS {
+        for key in process_wins {
             if let Some(preset) = process.get(*key).filter(|s| !s.is_empty()) {
                 vars.insert((*key).to_string(), preset.clone());
             }
@@ -172,7 +216,6 @@ pub fn require_shop_id(env: &ShopEnv) -> Result<String, Error> {
 }
 
 /// `(project_name, derived_from_shop_id_and_env)`.
-#[allow(dead_code)]
 pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
     if let Some(n) = env.get("COMPOSE_PROJECT_NAME") {
         return Ok((n.to_string(), false));
@@ -340,6 +383,38 @@ services:
         assert_eq!(env.get("SHOPWARE_SHOP_ID"), Some("fromproc"));
         assert_eq!(env.get("SHOPWARE_DEPLOY_ENV"), Some("staging"));
         assert_eq!(env.get("MYSQL_USER"), Some("shop"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn vps_ci_image_tag_wins_over_env_latest() {
+        let shop = temp_shop("vps-ci-tag");
+        fs::write(
+            shop.join(".env"),
+            "\
+SHOPWARE_SHOP_ID=acme
+SHOPWARE_DEPLOY_ENV=live
+IMAGE=ghcr.io/from-file/shop
+IMAGE_TAG=latest
+SMOKE_URL=http://from-file
+COMPOSE_PROFILES=redis
+",
+        )
+        .unwrap();
+        fs::write(
+            shop.join("deploy/sync.env"),
+            "IMAGE_TAG=from-sync-env\nSMOKE_URL=http://from-sync\n",
+        )
+        .unwrap();
+        let mut process = HashMap::new();
+        process.insert("IMAGE".into(), "ghcr.io/from-ci/shop".into());
+        process.insert("IMAGE_TAG".into(), "abc123deadbeef".into());
+        process.insert("SMOKE_URL".into(), "http://127.0.0.1:8000".into());
+        let env = ShopEnv::load_vps(shop.clone(), &process).unwrap();
+        assert_eq!(env.get("IMAGE"), Some("ghcr.io/from-ci/shop"));
+        assert_eq!(env.get("IMAGE_TAG"), Some("abc123deadbeef"));
+        assert_eq!(env.get("SMOKE_URL"), Some("http://127.0.0.1:8000"));
+        assert_eq!(env.get("COMPOSE_PROFILES"), Some("redis"));
         let _ = fs::remove_dir_all(&shop);
     }
 

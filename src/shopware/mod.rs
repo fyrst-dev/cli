@@ -3,9 +3,11 @@
 //! Database **dump** is owned by `shopware-cli project dump` — this CLI never
 //! wraps it. Database **import** is `fyrst-cli shopware db import` (also used
 //! by `shopware sync restore --data db`). `init-env` finishes shop-root `.env`
-//! (recipes `deploy/init-env.sh`). Other verbs stay stubs until recipe
-//! wrappers exist. See docs/ADR-0001-shopware-namespace.md.
+//! (recipes `deploy/init-env.sh`). VPS **release** is
+//! `fyrst-cli shopware release`. Other verbs stay stubs. See
+//! docs/ADR-0001-shopware-namespace.md.
 
+mod compose;
 mod data;
 mod env;
 mod envfile;
@@ -14,7 +16,9 @@ mod import;
 mod init_env;
 mod live;
 mod mysql;
+mod release;
 mod restore;
+mod rollout;
 mod snapshot;
 
 use crate::cli::{BackupCommand, DbCommand, ShopwareArgs, ShopwareCommand, SyncCommand};
@@ -50,7 +54,13 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
                 e.exit_code()
             }
         },
-        ShopwareCommand::Release(_) => not_implemented("shopware release"),
+        ShopwareCommand::Release(op) => match release::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
         ShopwareCommand::Rollback(_) => not_implemented("shopware rollback"),
         ShopwareCommand::Sync(SyncCommand::Sync(_)) => not_implemented("shopware sync sync"),
         ShopwareCommand::SyncLocal(_) => not_implemented("shopware sync-local"),
