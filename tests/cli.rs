@@ -34,6 +34,7 @@ fn shopware_help_prints_command_tree() {
         "fyrst-cli shopware sync snapshot",
         "fyrst-cli shopware backup restore",
         "not implemented",
+        "shopware-cli",
     ] {
         assert!(
             help.contains(needle),
@@ -75,7 +76,6 @@ fn stubs_exit_2_with_not_implemented() {
         &["shopware", "init-env", "--shop-id", "acme"],
         &["shopware", "release"],
         &["shopware", "rollback"],
-        &["shopware", "sync", "snapshot"],
         &["shopware", "sync", "restore"],
         &["shopware", "sync", "sync"],
         &["shopware", "sync-local"],

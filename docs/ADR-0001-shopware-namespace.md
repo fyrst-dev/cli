@@ -63,8 +63,14 @@ stay the product sources for those scripts and the console command.
    - Compose pull / setup / web / extra-profile order
    - `fyrst:sales-channel:rewrite-urls`
 
-4. **This change is a skeleton only.** Subcommands parse flags and print
-   `not implemented` on stderr with exit 2. `--help` is the contract.
+4. **Skeleton first, then real dump:** the clap tree landed as stubs (`not
+   implemented`, exit 2). The first real path is **`shopware sync snapshot`**
+   for a **local DB dump**: Rust resolves `COMPOSE_DIR` / `.env` / project name
+   and execs the same `docker run` + `shopware-cli project dump` the overlay
+   uses (`deploy/lib/sync-dump.sh` + `sync-db.sh`). It does **not** wrap
+   `deploy/sync-runtime.sh` yet (recipe wrappers stay future work). Bind-mount
+   volume copy, remote SSH `--from`, and `SYNC_DUMP_ENGINE=mysqldump` remain
+   stub (exit 2). `--help` is still the flag contract.
 
 ## Consequences
 
@@ -76,3 +82,7 @@ stay the product sources for those scripts and the console command.
   overlay script subcommands so a later 1:1 wrap stays obvious.
 - Other fyrst products should add a sibling of `shopware`, not top-level
   Shopware verbs.
+- Operators can dump a running Compose MySQL with
+  `fyrst-cli shopware sync snapshot --data db` without invoking the bash
+  overlay. Passwords never appear on stdout/stderr (dry-run omits
+  `--password`). `.env` is read as `KEY=VALUE` without bash expansion.

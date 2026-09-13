@@ -20,7 +20,8 @@ Command tree:
   fyrst-cli shopware backup prune
   fyrst-cli shopware backup restore
 
-Recipe wrappers are not implemented yet. See docs/command-matrix.md.
+`shopware sync snapshot` dumps the local DB via shopware-cli.
+Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
 #[derive(Debug, Parser)]
@@ -30,8 +31,8 @@ Recipe wrappers are not implemented yet. See docs/command-matrix.md.
     about = "fyrst.dev global CLI",
     long_about = "Home of the fyrst.dev global CLI (`fyrst-cli`).\n\n\
 Shopware CD ops live under `shopware`. Other fyrst namespaces can be added later.\n\n\
-This binary does not yet wrap Flex recipe scripts. Subcommands other than --help \
-exit 2 with \"not implemented\".",
+`shopware sync snapshot` (local) dumps the database via `shopware-cli project dump`. \
+Other shopware subcommands still exit 2 with \"not implemented\".",
     arg_required_else_help = true,
     subcommand_required = true,
     propagate_version = true
@@ -54,8 +55,9 @@ pub enum Command {
     about = "Shopware CD operations",
     long_about = "Shopware CD operations. Names match Flex overlay scripts under \
 deploy/ in fyrst-dev/recipes (`fyrst/shopware-cd`).\n\n\
-Future thin wrappers will keep calling:\n  \
-- shopware-cli project dump (DB snapshot)\n  \
+`sync snapshot` (local, DB) is implemented: it runs `shopware-cli project dump` in a \
+one-shot container. Bind-mount volume copy and remote SSH snapshot are still stub.\n\n\
+Other verbs will keep calling:\n  \
 - mysql/mariadb client import (DB restore)\n  \
 - docker compose (release / rollback)\n  \
 - bin/console fyrst:sales-channel:rewrite-urls (opt-in after restore)\n\n\
@@ -147,7 +149,7 @@ pub struct RollbackArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum SyncCommand {
-    /// Dump DB and/or copy bind-mount trees into --snapshot-dir
+    /// Dump DB via shopware-cli (local); bind-mount copy is not implemented
     Snapshot(SyncOpArgs),
     /// Load --snapshot-dir into this host's DB and/or SHOPWARE_DATA_ROOT
     Restore(SyncOpArgs),
@@ -248,6 +250,38 @@ mod tests {
     #[test]
     fn clap_debug_assert() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn snapshot_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "sync",
+            "snapshot",
+            "--from",
+            "local",
+            "--data",
+            "db",
+            "--snapshot-dir",
+            "/tmp/s",
+            "--dry-run",
+            "--skip-volumes",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Sync(SyncCommand::Snapshot(op)),
+            }) => {
+                assert_eq!(op.from.as_deref(), Some("local"));
+                assert_eq!(op.data.as_deref(), Some("db"));
+                assert_eq!(op.snapshot_dir.as_deref(), Some("/tmp/s"));
+                assert!(op.dry_run);
+                assert!(op.skip_volumes);
+                assert!(!op.skip_db);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
     }
 
     #[test]
