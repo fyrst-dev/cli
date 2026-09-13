@@ -11,12 +11,24 @@
 #   REPO               GitHub repo owner/name. Default: fyrst-dev/cli
 #   GITHUB_TOKEN / GH_TOKEN  Optional; used only as an Authorization header
 #                            (never printed) if GitHub rate-limits anonymous API.
+#   FYRST_CLI_GITHUB_API     API root. Default: https://api.github.com
+#   FYRST_CLI_GITHUB_DOWNLOAD Download root. Default: https://github.com
 set -euo pipefail
 
 REPO="${REPO:-fyrst-dev/cli}"
 PREFIX="${PREFIX:-/usr/local}"
 BINDIR="${BINDIR:-${PREFIX}/bin}"
 BINARY_NAME="fyrst-cli"
+GITHUB_API="${FYRST_CLI_GITHUB_API:-https://api.github.com}"
+GITHUB_DOWNLOAD="${FYRST_CLI_GITHUB_DOWNLOAD:-https://github.com}"
+INSTALL_TMP=""
+
+cleanup() {
+  if [[ -n "${INSTALL_TMP:-}" ]]; then
+    rm -rf "$INSTALL_TMP"
+  fi
+}
+trap cleanup EXIT
 
 usage() {
   cat <<EOF
@@ -278,10 +290,10 @@ main() {
   if [[ -n "$version" ]]; then
     tag="$(normalize_tag "$version")"
     validate_tag "$tag"
-    api="https://api.github.com/repos/${REPO}/releases/tags/${tag}"
+    api="${GITHUB_API}/repos/${REPO}/releases/tags/${tag}"
     log "resolving ${tag} from GitHub Releases"
   else
-    api="https://api.github.com/repos/${REPO}/releases/latest"
+    api="${GITHUB_API}/repos/${REPO}/releases/latest"
     log "resolving latest release from GitHub Releases"
   fi
 
@@ -290,12 +302,11 @@ main() {
   validate_tag "$tag"
 
   local tarball="${BINARY_NAME}-${TARGET}.tar.gz"
-  local url="https://github.com/${REPO}/releases/download/${tag}/${tarball}"
-  local sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS"
+  local url="${GITHUB_DOWNLOAD}/${REPO}/releases/download/${tag}/${tarball}"
+  local sums_url="${GITHUB_DOWNLOAD}/${REPO}/releases/download/${tag}/SHA256SUMS"
 
-  local tmp
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  INSTALL_TMP="$(mktemp -d)"
+  local tmp="$INSTALL_TMP"
 
   log "downloading ${tarball} (${tag}, ${TARGET})"
   http_download_file "$url" "${tmp}/${tarball}" || die "failed to download ${url} (no matching asset for this OS/arch?)"
