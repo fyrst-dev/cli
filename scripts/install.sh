@@ -5,7 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | bash
 #
 # Env:
-#   FYRST_CLI_VERSION  Release tag (e.g. v0.1.0). Default: latest.
+#   FYRST_CLI_VERSION  Release tag (e.g. 0.1.0). Default: latest.
+#                      A leading v is stripped if present.
 #   PREFIX             Install prefix. Default: /usr/local
 #   BINDIR             Binary directory. Default: $PREFIX/bin
 #   REPO               GitHub repo owner/name. Default: fyrst-dev/cli
@@ -38,7 +39,7 @@ Usage:
   install.sh [VERSION]
   install.sh --help
 
-VERSION may also be set via FYRST_CLI_VERSION (e.g. v0.1.0). Default: latest.
+VERSION may also be set via FYRST_CLI_VERSION (e.g. 0.1.0). Default: latest.
 
 Environment:
   PREFIX      Install prefix (default: /usr/local)
@@ -48,7 +49,7 @@ Environment:
 Examples:
   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash
   PREFIX="\$HOME/.local" bash scripts/install.sh
-  FYRST_CLI_VERSION=v0.1.0 bash scripts/install.sh
+  FYRST_CLI_VERSION=0.1.0 bash scripts/install.sh
 EOF
 }
 
@@ -202,13 +203,14 @@ normalize_tag() {
     printf ''
     return
   fi
+  # Prefer plain semver tags (0.1.0). Strip a leading v if passed.
   v="${v#v}"
-  printf 'v%s' "$v"
+  printf '%s' "$v"
 }
 
 validate_tag() {
   local tag="$1"
-  [[ "$tag" =~ ^v[A-Za-z0-9._-]+$ ]] || die "unexpected release tag '${tag}'"
+  [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]] || die "unexpected release tag '${tag}'"
 }
 
 validate_repo() {
@@ -299,6 +301,7 @@ main() {
 
   json="$(http_get_stdout "$api")" || die "failed to fetch ${api}"
   tag="$(parse_tag_name "$json")"
+  tag="$(normalize_tag "$tag")"
   validate_tag "$tag"
 
   local tarball="${BINARY_NAME}-${TARGET}.tar.gz"

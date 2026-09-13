@@ -35,7 +35,8 @@ See [docs/ADR-0001-shopware-namespace.md](docs/ADR-0001-shopware-namespace.md),
 
 Linux amd64 (`x86_64-unknown-linux-gnu`) and arm64 (`aarch64-unknown-linux-gnu`)
 binaries are published on [GitHub Releases](https://github.com/fyrst-dev/cli/releases).
-macOS and other hosts: build from source.
+Release tags look like `0.1.0` (no `v` prefix). macOS and other hosts: build from
+source.
 
 ### Script (recommended)
 
@@ -52,7 +53,7 @@ or passwords.
 PREFIX="$HOME/.local" curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | bash
 
 # pin a release
-FYRST_CLI_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | bash
+FYRST_CLI_VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | bash
 ```
 
 ### Manual download
@@ -62,8 +63,8 @@ for your arch (`fyrst-cli-x86_64-unknown-linux-gnu.tar.gz` or
 `fyrst-cli-aarch64-unknown-linux-gnu.tar.gz`) and `SHA256SUMS`:
 
 ```bash
-curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/v0.1.0/fyrst-cli-x86_64-unknown-linux-gnu.tar.gz
-curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/v0.1.0/SHA256SUMS
+curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/0.1.0/fyrst-cli-x86_64-unknown-linux-gnu.tar.gz
+curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/0.1.0/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
 tar -xzf fyrst-cli-x86_64-unknown-linux-gnu.tar.gz
 sudo install -m 0755 fyrst-cli /usr/local/bin/fyrst-cli
@@ -191,4 +192,5 @@ cargo test
 ```
 
 CI runs `cargo check` and `cargo test` on pull requests and `main`. Release
-tags `v*` build Linux tarballs via `.github/workflows/release.yml`.
+tags like `0.1.0` (no `v` prefix) build Linux tarballs via
+`.github/workflows/release.yml`.

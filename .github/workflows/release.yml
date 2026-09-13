@@ -1,11 +1,13 @@
-# Build Linux release tarballs and attach them to the GitHub Release for tag v*.
+# Build Linux release tarballs and attach them to the GitHub Release for
+# digit-leading semver tags (0.1.0, 1.2.3-rc.1). No v prefix.
 # Existing ci.yml (check + test on PR/push) is unchanged.
 name: Release
 
 on:
   push:
     tags:
-      - "v*"
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
 
 permissions:
@@ -74,7 +76,7 @@ jobs:
   release:
     name: github-release
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
