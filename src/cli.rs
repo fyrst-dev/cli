@@ -12,6 +12,7 @@ Command tree:
   fyrst-cli shopware init-env
   fyrst-cli shopware release
   fyrst-cli shopware rollback
+  fyrst-cli shopware db import
   fyrst-cli shopware sync snapshot
   fyrst-cli shopware sync restore
   fyrst-cli shopware sync sync
@@ -20,7 +21,9 @@ Command tree:
   fyrst-cli shopware backup prune
   fyrst-cli shopware backup restore
 
-Recipe wrappers are not implemented yet. See docs/command-matrix.md.
+Dump = shopware-cli project dump only (fyrst-cli does not dump).
+Import = fyrst-cli shopware db import (also used by sync restore --data db).
+Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
 #[derive(Debug, Parser)]
@@ -30,8 +33,10 @@ Recipe wrappers are not implemented yet. See docs/command-matrix.md.
     about = "fyrst.dev global CLI",
     long_about = "Home of the fyrst.dev global CLI (`fyrst-cli`).\n\n\
 Shopware CD ops live under `shopware`. Other fyrst namespaces can be added later.\n\n\
-This binary does not yet wrap Flex recipe scripts. Subcommands other than --help \
-exit 2 with \"not implemented\".",
+Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap dump. \
+`shopware db import` loads a .sql / .sql.gz via the MySQL/MariaDB client. \
+`shopware sync snapshot` is not a dump command. Other shopware subcommands still exit 2 \
+with \"not implemented\".",
     arg_required_else_help = true,
     subcommand_required = true,
     propagate_version = true
@@ -54,9 +59,10 @@ pub enum Command {
     about = "Shopware CD operations",
     long_about = "Shopware CD operations. Names match Flex overlay scripts under \
 deploy/ in fyrst-dev/recipes (`fyrst/shopware-cd`).\n\n\
-Future thin wrappers will keep calling:\n  \
-- shopware-cli project dump (DB snapshot)\n  \
-- mysql/mariadb client import (DB restore)\n  \
+`db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
+one-shot client image for DATABASE_URL). `sync restore --data db` uses the same module. \
+Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
+Other verbs will keep calling:\n  \
 - docker compose (release / rollback)\n  \
 - bin/console fyrst:sales-channel:rewrite-urls (opt-in after restore)\n\n\
 Those tools are not reimplemented here.",
@@ -76,6 +82,9 @@ pub enum ShopwareCommand {
     Release(ReleaseArgs),
     /// Re-deploy IMAGE using IMAGE_TAG from .previous-tag (deploy/vps-rollback.sh)
     Rollback(RollbackArgs),
+    /// Import a SQL dump (shopware-cli has no import)
+    #[command(subcommand)]
+    Db(DbCommand),
     /// Snapshot / restore / sync runtime data (deploy/sync-runtime.sh)
     #[command(subcommand)]
     Sync(SyncCommand),
@@ -146,10 +155,31 @@ pub struct RollbackArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum DbCommand {
+    /// Import a .sql or .sql.gz dump into this shop's database
+    Import(DbImportArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DbImportArgs {
+    /// Path to a .sql or .sql.gz dump
+    #[arg(long = "file", value_name = "PATH")]
+    pub file: String,
+
+    /// Print the import plan; do not import
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Allow importing onto a live host (or set SYNC_ALLOW_LIVE_RESTORE=1)
+    #[arg(long = "allow-live")]
+    pub allow_live: bool,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum SyncCommand {
-    /// Dump DB and/or copy bind-mount trees into --snapshot-dir
+    /// Not a dump command: use shopware-cli project dump; volumes are stub
     Snapshot(SyncOpArgs),
-    /// Load --snapshot-dir into this host's DB and/or SHOPWARE_DATA_ROOT
+    /// Load --snapshot-dir into this host's DB (same import as `db import`)
     Restore(SyncOpArgs),
     /// Pull from --from then apply locally (cron path: rsync trees + DB)
     Sync(SyncOpArgs),
@@ -169,7 +199,7 @@ pub struct SyncOpArgs {
     #[arg(long = "snapshot-dir", value_name = "DIR")]
     pub snapshot_dir: Option<String>,
 
-    /// Print actions; do not dump, copy, or restore
+    /// Print actions; do not copy or restore (snapshot does not dump)
     #[arg(long)]
     pub dry_run: bool,
 
@@ -251,6 +281,38 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "sync",
+            "snapshot",
+            "--from",
+            "local",
+            "--data",
+            "db",
+            "--snapshot-dir",
+            "/tmp/s",
+            "--dry-run",
+            "--skip-volumes",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Sync(SyncCommand::Snapshot(op)),
+            }) => {
+                assert_eq!(op.from.as_deref(), Some("local"));
+                assert_eq!(op.data.as_deref(), Some("db"));
+                assert_eq!(op.snapshot_dir.as_deref(), Some("/tmp/s"));
+                assert!(op.dry_run);
+                assert!(op.skip_volumes);
+                assert!(!op.skip_db);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
     fn shopware_help_lists_command_tree() {
         let cmd = Cli::command();
         let shopware = cmd.find_subcommand("shopware").expect("shopware");
@@ -261,6 +323,7 @@ mod tests {
             "sync",
             "sync-local",
             "backup",
+            "db",
         ] {
             assert!(
                 shopware.find_subcommand(name).is_some(),
@@ -279,6 +342,37 @@ mod tests {
                 backup.find_subcommand(name).is_some(),
                 "missing backup {name}",
             );
+        }
+
+        let db = shopware.find_subcommand("db").unwrap();
+        assert!(
+            db.find_subcommand("import").is_some(),
+            "missing shopware db import",
+        );
+    }
+
+    #[test]
+    fn db_import_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "db",
+            "import",
+            "--file",
+            "/tmp/db.sql.gz",
+            "--dry-run",
+            "--allow-live",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Db(DbCommand::Import(op)),
+            }) => {
+                assert_eq!(op.file, "/tmp/db.sql.gz");
+                assert!(op.dry_run);
+                assert!(op.allow_live);
+            }
+            other => panic!("unexpected parse: {other:?}"),
         }
     }
 }

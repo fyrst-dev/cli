@@ -1,9 +1,9 @@
 //! fyrst.dev global CLI (`fyrst-cli`).
 //!
-//! Shopware CD commands under `shopware` are a clap skeleton in this commit.
-//! They exit 2 with "not implemented". Future work wraps Flex recipe scripts;
-//! it does not reimplement `shopware-cli project dump`, MySQL import, Compose
-//! release, or `fyrst:sales-channel:rewrite-urls`.
+//! Database dumps are owned by `shopware-cli project dump`. This binary does
+//! not wrap dump. Database import is `fyrst-cli shopware db import` (MySQL
+//! client via Compose exec or a one-shot client image). Other shopware verbs
+//! still exit 2 except `sync restore` for the DB path.
 
 mod cli;
 mod shopware;
