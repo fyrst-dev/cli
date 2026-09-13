@@ -22,12 +22,13 @@ Command tree:
   fyrst-cli shopware backup restore
 
 Dump = shopware-cli project dump only (fyrst-cli does not dump).
-Import = fyrst-cli shopware db import (also used by sync restore --data db).
+Import = fyrst-cli shopware db import (also used by sync restore --data db and sync sync).
 init-env = fyrst-cli shopware init-env (shop-root .env after create + Flex).
 Release = fyrst-cli shopware release (VPS compose; never builds).
 Rollback = fyrst-cli shopware rollback (IMAGE_TAG from .previous-tag).
 Snapshot volumes = fyrst-cli shopware sync snapshot (bind-mount trees; not a dump).
 sync restore also restores bind-mount volumes and opt-in rewrite via compose web.
+sync sync = pull: rsync remote bind-mounts + import of an already-present dump (does not dump).
 sync-local = VPS → local project-dev rsync (never DB; not SHOPWARE_DATA_ROOT).
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
@@ -47,6 +48,7 @@ Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap
 `shopware sync snapshot` copies bind-mount / volume trees; it is not a dump command. \
 `shopware sync restore` loads --snapshot-dir (same import module, bind-mount volumes, \
 opt-in rewrite via compose web). \
+`shopware sync sync` pulls from `--from` (rsync bind-mounts + import of an already-present dump) and does not dump. \
 `shopware sync-local` rsyncs VPS upload trees into a local project-dev checkout (never DB). \
 Other shopware subcommands still exit 2 with \"not implemented\".",
     arg_required_else_help = true,
@@ -79,6 +81,9 @@ Passwords and APP_SECRET are never printed.\n\n\
 one-shot client image for DATABASE_URL). `sync restore` uses that same import module, \
 restores bind-mount volumes from --snapshot-dir, stops/starts web/worker/scheduler, and \
 runs opt-in `bin/console fyrst:sales-channel:rewrite-urls` via compose `web`. \
+`sync sync` is the cron/operator pull path: rsync remote bind-mounts onto this host, then \
+import `db.sql.gz` from `--snapshot-dir` if `--data` includes db (does not dump). \
+`--from local` is a snapshot+restore pipeline check, not the staging cron path. \
 `release` is implemented: VPS `docker compose` pull + recreate \
 (`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`). Never builds images. \
 `sync snapshot` copies bind-mount trees into --snapshot-dir/data/<item>/; it does not dump. \
@@ -223,7 +228,7 @@ pub enum SyncCommand {
     Snapshot(SyncOpArgs),
     /// Load --snapshot-dir onto this host (DB import + bind-mount volumes)
     Restore(SyncOpArgs),
-    /// Pull from --from then apply locally (cron path: rsync trees + DB)
+    /// Pull from --from then apply locally (rsync + import; does not dump)
     Sync(SyncOpArgs),
 }
 
@@ -320,6 +325,35 @@ mod tests {
     #[test]
     fn clap_debug_assert() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn sync_sync_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "sync",
+            "sync",
+            "--from",
+            "live",
+            "--data",
+            "media,files",
+            "--dry-run",
+            "--skip-db",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Sync(SyncCommand::Sync(op)),
+            }) => {
+                assert_eq!(op.from.as_deref(), Some("live"));
+                assert_eq!(op.data.as_deref(), Some("media,files"));
+                assert!(op.dry_run);
+                assert!(op.skip_db);
+                assert!(!op.skip_volumes);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
     }
 
     #[test]

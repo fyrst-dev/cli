@@ -11,9 +11,11 @@ pub use super::env::archive_image;
 use super::error::Error;
 use super::mysql::{require_docker, require_gzip, verify_gzip_magic};
 use super::ssh::{
-    posix_quote, remote_bash, remote_dir_exists, resolve_remote_project_name, ssh_e_opt, SshSource,
+    posix_quote, remote_bash, remote_dir_exists, resolve_remote_project_name, spawn_remote_bash,
+    ssh_e_opt, SshSource,
 };
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -726,6 +728,295 @@ fn abs_path(path: &Path) -> String {
         .to_string()
 }
 
+fn slash_dir(p: &Path) -> String {
+    let s = p.display().to_string();
+    if s.ends_with('/') {
+        s
+    } else {
+        format!("{s}/")
+    }
+}
+
+pub fn remote_rsync_log_line(ssh_target: &str, remote_dir: &Path, dest: &Path) -> String {
+    format!(
+        "Rsync {ssh_target}:{} → {}",
+        slash_dir(remote_dir),
+        slash_dir(dest)
+    )
+}
+
+/// Overlay dry-run line for `sync_bind_from_remote`.
+pub fn remote_rsync_dry_run_line(ssh_target: &str, remote_dir: &Path, dest: &Path) -> String {
+    format!(
+        "DRY-RUN rsync -az --delete {ssh_target}:{} {}; chown 82:82",
+        slash_dir(remote_dir),
+        slash_dir(dest)
+    )
+}
+
+pub fn local_rsync_dry_run_line(src: &Path, dest: &Path) -> String {
+    format!("DRY-RUN rsync {} {}", slash_dir(src), slash_dir(dest))
+}
+
+pub fn local_restore_dry_run_line(src: &Path, dest: &Path) -> String {
+    format!(
+        "DRY-RUN rsync {} {}; chown 82:82",
+        slash_dir(src),
+        slash_dir(dest)
+    )
+}
+
+fn extract_stream_tar(
+    dest: &Path,
+    archive_image: &str,
+    mut tar_stdout: impl io::Read,
+) -> Result<(), Error> {
+    require_docker()?;
+    let _ = fs::create_dir_all(dest);
+    let mut docker = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-i",
+            "-v",
+            &format!("{}:/to", dest.display()),
+            archive_image,
+            "sh",
+            "-c",
+            "set -eu; find /to -mindepth 1 -maxdepth 1 -exec rm -rf {} +; tar -C /to -xzf -; chown -R 82:82 /to || true",
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::fail(format!("failed to exec docker extract: {e}")))?;
+    {
+        let mut stdin = docker
+            .stdin
+            .take()
+            .ok_or_else(|| Error::fail("internal error: docker stdin pipe missing"))?;
+        io::copy(&mut tar_stdout, &mut stdin)
+            .map_err(|e| Error::fail(format!("tar pipe to docker failed: {e}")))?;
+    }
+    let status = docker
+        .wait()
+        .map_err(|e| Error::fail(format!("docker extract wait: {e}")))?;
+    if !status.success() {
+        return Err(Error::fail(format!(
+            "docker tar extract into {} failed",
+            dest.display()
+        )));
+    }
+    Ok(())
+}
+
+fn tar_from_remote(
+    ssh: &SshSource,
+    remote_dir: &Path,
+    dest: &Path,
+    archive_image: &str,
+) -> Result<(), Error> {
+    let script = format!(
+        "docker run --rm -v {}:/from:ro {} tar -C /from -czf - .",
+        posix_quote(&remote_dir.display().to_string()),
+        posix_quote(archive_image)
+    );
+    let mut child = spawn_remote_bash(ssh, &script)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::fail("internal error: ssh stdout pipe missing"))?;
+    extract_stream_tar(dest, archive_image, stdout)?;
+    let status = child
+        .wait()
+        .map_err(|e| Error::fail(format!("ssh tar wait: {e}")))?;
+    if !status.success() {
+        return Err(Error::fail(format!(
+            "remote tar of {} failed",
+            remote_dir.display()
+        )));
+    }
+    Ok(())
+}
+
+fn sync_archive_named_volume_remote(
+    ssh: &SshSource,
+    env: &ShopEnv,
+    snapshot_dir: &Path,
+    logical: &str,
+    archive_image: &str,
+) -> Result<PathBuf, Error> {
+    let (project, _) = derive_project_name(env)?;
+    let vol = volume_docker_name(&project, logical);
+    let tarout = snapshot_dir
+        .join("volumes")
+        .join(format!("{logical}.tar.gz"));
+    fs::create_dir_all(tarout.parent().unwrap()).map_err(|e| {
+        Error::fail(format!(
+            "cannot create {}: {e}",
+            tarout.parent().unwrap().display()
+        ))
+    })?;
+    println!(
+        "==> Archiving remote named volume {vol} on {} → {} (bind-mount fallback)",
+        ssh.target,
+        tarout.display()
+    );
+    let script = format!(
+        "if ! docker volume inspect {vol_q} >/dev/null 2>&1; then\n  echo \"Named volume {vol} not found on source (project {project}).\" >&2\n  exit 1\nfi\ndocker run --rm -v {vol_q}:/from:ro {img} tar -C /from -czf - .",
+        vol_q = posix_quote(&vol),
+        img = posix_quote(archive_image),
+        vol = vol,
+        project = project,
+    );
+    let out = remote_bash(ssh, &script)?;
+    if !out.status.success() {
+        return Err(Error::fail(format!(
+            "Remote named-volume archive for {logical} failed"
+        )));
+    }
+    if out.stdout.is_empty() {
+        return Err(Error::fail(format!(
+            "Remote volume archive for {logical} was empty"
+        )));
+    }
+    fs::write(&tarout, &out.stdout)
+        .map_err(|e| Error::fail(format!("cannot write {}: {e}", tarout.display())))?;
+    Ok(tarout)
+}
+
+/// Cron path: rsync remote bind-mount onto this host (no snapshot tree).
+pub fn sync_bind_from_remote(
+    ssh: &SshSource,
+    env: &ShopEnv,
+    remote_root: &Path,
+    data_root: &Path,
+    snapshot_dir: &Path,
+    logical: &str,
+    dry_run: bool,
+) -> Result<(), Error> {
+    let src = bind_item_dir(remote_root, logical);
+    let dest = bind_item_dir(data_root, logical);
+    let image = archive_image(env);
+    println!("==> {}", remote_rsync_log_line(&ssh.target, &src, &dest));
+    if dry_run {
+        println!(
+            "==> {}",
+            remote_rsync_dry_run_line(&ssh.target, &src, &dest)
+        );
+        return Ok(());
+    }
+    let _ = fs::create_dir_all(&dest);
+    let rsync_ok = have_cmd("rsync") && dest.is_dir() && path_writable(&dest);
+    if remote_dir_exists(ssh, &src).unwrap_or(false) && rsync_ok {
+        match rsync_from_remote_tree(ssh, &src, &dest) {
+            Ok(()) => {
+                chown_data_dir(&dest, &image)?;
+                return Ok(());
+            }
+            Err(_) => {
+                println!(
+                    "==> rsync into {} failed (permissions?); tar via SSH + docker extract",
+                    dest.display()
+                );
+            }
+        }
+    }
+    if remote_dir_exists(ssh, &src).unwrap_or(false) {
+        tar_from_remote(ssh, &src, &dest, &image)?;
+        return Ok(());
+    }
+    println!(
+        "==> Remote bind mount {} missing; named-volume fallback into snapshot then restore",
+        src.display()
+    );
+    let tar = sync_archive_named_volume_remote(ssh, env, snapshot_dir, logical, &image)?;
+    restore_tar(&tar, &dest, &image)?;
+    Ok(())
+}
+
+pub fn snapshot_bind_local_plan(src: &Path, snap: &Path) {
+    println!(
+        "==> Snapshot bind mount {} → {}",
+        src.display(),
+        snap.display()
+    );
+    println!("==> {}", local_rsync_dry_run_line(src, snap));
+}
+
+pub fn restore_bind_local_plan(snap: &Path, dest: &Path) {
+    println!(
+        "==> Restoring bind mount {} from {}",
+        dest.display(),
+        snap.display()
+    );
+    println!("==> {}", local_restore_dry_run_line(snap, dest));
+}
+
+/// Local pipeline check: rsync bind-mount → snapshot-dir, then back to data root.
+pub fn sync_bind_local_roundtrip(
+    env: &ShopEnv,
+    data_root: &Path,
+    snapshot_dir: &Path,
+    logical: &str,
+    dry_run: bool,
+) -> Result<(), Error> {
+    let src = bind_item_dir(data_root, logical);
+    let snap = snapshot_dir.join("data").join(logical);
+    let dest = bind_item_dir(data_root, logical);
+    let image = archive_image(env);
+    if dry_run {
+        if src.is_dir() {
+            snapshot_bind_local_plan(&src, &snap);
+        } else {
+            println!(
+                "==> Bind mount {} missing; DRY-RUN would archive named volume then restore",
+                src.display()
+            );
+        }
+        restore_bind_local_plan(&snap, &dest);
+        return Ok(());
+    }
+    if src.is_dir() {
+        println!(
+            "==> Snapshot bind mount {} → {}",
+            src.display(),
+            snap.display()
+        );
+        if have_cmd("rsync") {
+            rsync_local_trees(&src, &snap)?;
+        } else {
+            fs::create_dir_all(&snap)
+                .map_err(|e| Error::fail(format!("cannot create {}: {e}", snap.display())))?;
+            docker_copy_tree(&src, &snap, &image)?;
+        }
+    } else {
+        return Err(Error::fail(format!(
+            "Bind mount {} missing; named-volume snapshot is not used on --from local in this command. Create the bind-mount tree or pull with --from <live-alias>.",
+            src.display()
+        )));
+    }
+    println!(
+        "==> Restoring bind mount {} from {}",
+        dest.display(),
+        snap.display()
+    );
+    let _ = fs::create_dir_all(&dest);
+    if have_cmd("rsync") && dest.is_dir() && path_writable(&dest) {
+        match rsync_local_trees(&snap, &dest) {
+            Ok(()) => {
+                chown_data_dir(&dest, &image)?;
+                return Ok(());
+            }
+            Err(_) => {
+                println!(
+                    "==> rsync into {} failed (permissions?); docker copy",
+                    dest.display()
+                );
+            }
+        }
+    }
+    docker_copy_tree(&snap, &dest, &image)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -857,5 +1148,19 @@ mod tests {
         assert!(err.to_string().contains("data/media"), "{err}");
         assert!(err.to_string().contains("volumes/media.tar.gz"), "{err}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dry_run_rsync_line_matches_overlay() {
+        let line = remote_rsync_dry_run_line(
+            "deploy@live.example.com",
+            Path::new("/var/lib/shopware/data/acme/live/media"),
+            Path::new("/var/lib/shopware/data/acme/staging/media"),
+        );
+        assert_eq!(
+            line,
+            "DRY-RUN rsync -az --delete deploy@live.example.com:/var/lib/shopware/data/acme/live/media/ /var/lib/shopware/data/acme/staging/media/; chown 82:82"
+        );
+        assert!(!line.contains("project dump"));
     }
 }

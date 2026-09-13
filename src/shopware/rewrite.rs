@@ -6,8 +6,9 @@
 use super::env::{existing_compose_files, ShopEnv};
 use super::error::Error;
 use super::live::LiveSignals;
-use super::mysql::{compose_argv, compose_cli_log};
+use super::mysql::{compose_argv, compose_cli_log, require_docker};
 use std::path::Path;
+use std::process::Command;
 
 pub fn rewrite_requested(env: &ShopEnv) -> bool {
     env.get("SYNC_REWRITE_APP_URL").is_some() || env.get("SYNC_REWRITE_URL_MAP").is_some()
@@ -73,6 +74,78 @@ pub fn rewrite_log_line(env: &ShopEnv, compose_dir: &Path, dry_run: bool) -> Str
         compose_cli_log(&files),
         flags.join(" ")
     )
+}
+
+/// Names used by `shopware sync sync` (same predicates as restore).
+pub fn requested(env: &ShopEnv) -> bool {
+    rewrite_requested(env)
+}
+
+pub fn assert_not_live(signals: &LiveSignals) -> Result<(), Error> {
+    assert_not_live_rewrite(signals)
+}
+
+pub fn skip_without_db_log() -> &'static str {
+    "SYNC_REWRITE_APP_URL / SYNC_REWRITE_URL_MAP set but db was skipped — not rewriting sales_channel_domain"
+}
+
+pub fn maybe_rewrite(
+    env: &ShopEnv,
+    signals: &LiveSignals,
+    compose_dir: &Path,
+    files: &[String],
+    want_db_restored: bool,
+    dry_run: bool,
+) -> Result<(), Error> {
+    if !requested(env) {
+        return Ok(());
+    }
+    assert_not_live(signals)?;
+    if !want_db_restored {
+        println!("==> {}", skip_without_db_log());
+        return Ok(());
+    }
+    println!(
+        "==> Opt-in sales_channel_domain rewrite via fyrst:sales-channel:rewrite-urls (sales channel domains only; media CDN / plugin configs / payment webhooks are not updated)"
+    );
+    if files.is_empty() {
+        return Err(Error::fail(
+            "No compose files found under shop root; cannot run fyrst:sales-channel:rewrite-urls.",
+        ));
+    }
+    let checkout = super::live::shop_basename(compose_dir);
+    let args = {
+        let mut a = compose_argv(files);
+        a.extend([
+            "run".into(),
+            "--rm".into(),
+            "--pull".into(),
+            "never".into(),
+            "--entrypoint".into(),
+            "php".into(),
+            "web".into(),
+            "bin/console".into(),
+            "fyrst:sales-channel:rewrite-urls".into(),
+        ]);
+        a.extend(console_flag_args(env, &checkout, dry_run));
+        a
+    };
+    if dry_run {
+        println!("==> DRY-RUN docker {}", args.join(" "));
+        return Ok(());
+    }
+    require_docker()?;
+    let status = Command::new("docker")
+        .args(&args)
+        .current_dir(compose_dir)
+        .status()
+        .map_err(|e| Error::fail(format!("could not exec docker compose rewrite: {e}")))?;
+    if !status.success() {
+        return Err(Error::fail(
+            "fyrst:sales-channel:rewrite-urls failed. composer update fyrst/shopware-cd so the command and FyrstShopwareCdBundle exist, then composer recipes:update fyrst/shopware-cd.",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
