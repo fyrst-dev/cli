@@ -31,6 +31,60 @@ See [docs/ADR-0001-shopware-namespace.md](docs/ADR-0001-shopware-namespace.md),
 [docs/command-matrix.md](docs/command-matrix.md), and
 [docs/manual-db-import-test.md](docs/manual-db-import-test.md).
 
+## Install
+
+Linux amd64 (`x86_64-unknown-linux-gnu`) and arm64 (`aarch64-unknown-linux-gnu`)
+binaries are published on [GitHub Releases](https://github.com/fyrst-dev/cli/releases).
+macOS and other hosts: build from source.
+
+### Script (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | bash
+```
+
+Installs to `/usr/local/bin/fyrst-cli` (`PREFIX`, default `/usr/local`). `sudo`
+is used only when that prefix is not writable. The script does not print tokens
+or passwords.
+
+```bash
+# user-writable prefix (no sudo)
+PREFIX="$HOME/.local" curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | bash
+
+# pin a release
+FYRST_CLI_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | bash
+```
+
+### Manual download
+
+From [Releases](https://github.com/fyrst-dev/cli/releases), download the tarball
+for your arch (`fyrst-cli-x86_64-unknown-linux-gnu.tar.gz` or
+`fyrst-cli-aarch64-unknown-linux-gnu.tar.gz`) and `SHA256SUMS`:
+
+```bash
+curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/v0.1.0/fyrst-cli-x86_64-unknown-linux-gnu.tar.gz
+curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/v0.1.0/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf fyrst-cli-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 fyrst-cli /usr/local/bin/fyrst-cli
+```
+
+### From source
+
+```bash
+cargo build --release
+install -m 0755 target/release/fyrst-cli /usr/local/bin/fyrst-cli
+```
+
+Requires a Rust toolchain (edition 2021).
+
+### Runtime
+
+Docker is still required at runtime for `shopware db import` (Compose `mysql`
+exec, or a one-shot mysql/mariadb client container). Installing this binary
+does not replace Docker. Dump stays with `shopware-cli project dump`; fyrst-cli
+does not dump.
+
 ## Command tree
 
 ```
@@ -127,6 +181,8 @@ Passwords (`MYSQL_PASSWORD`, `DATABASE_URL`) are never printed.
 
 ## Build
 
+For local development (also see [Install](#install) for release binaries):
+
 ```bash
 cargo build
 cargo run -- shopware --help
@@ -134,5 +190,5 @@ cargo run -- shopware db import --help
 cargo test
 ```
 
-Requires a Rust toolchain (edition 2021). CI runs `cargo check` and
-`cargo test`.
+CI runs `cargo check` and `cargo test` on pull requests and `main`. Release
+tags `v*` build Linux tarballs via `.github/workflows/release.yml`.
