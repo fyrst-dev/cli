@@ -1,9 +1,9 @@
 //! fyrst.dev global CLI (`fyrst-cli`).
 //!
-//! `shopware sync snapshot` dumps the local database by delegating to
-//! `shopware-cli project dump` (one-shot official CLI image). Other shopware
-//! verbs still exit 2. This binary does not reimplement dump, MySQL import,
-//! Compose release, or `fyrst:sales-channel:rewrite-urls`.
+//! Database dumps are owned by `shopware-cli project dump`. This binary does
+//! not wrap dump. Database import is `fyrst-cli shopware db import` (MySQL
+//! client via Compose exec or a one-shot client image). Other shopware verbs
+//! still exit 2 except `sync restore` for the DB path.
 
 mod cli;
 mod shopware;

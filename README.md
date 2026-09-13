@@ -9,26 +9,27 @@ License: MIT.
 
 ## Status
 
-**Implemented:** `fyrst-cli shopware sync snapshot` for a **local database
-dump**. It delegates to `shopware-cli project dump` in a one-shot container
-(`ghcr.io/shopware/shopware-cli:0.18.4`, override with
-`SYNC_SHOPWARE_CLI_IMAGE`), attached to the Compose network
-`${COMPOSE_PROJECT_NAME}_default` (derived as
-`${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}` when `COMPOSE_PROJECT_NAME` is
-unset). Output is `${SNAPSHOT_DIR}/db.sql.gz` (default
-`<shop>/var/runtime-sync`).
+**Implemented:** `fyrst-cli shopware db import` — load a `.sql` or `.sql.gz`
+dump into this shop's database. shopware-cli has no import; this is the gap
+this CLI fills. `fyrst-cli shopware sync restore --data db` uses the same
+import module (`--snapshot-dir/db.sql.gz` or `db.sql`).
 
-**Still stub (exit 2):** bind-mount volume copy, remote SSH `--from <alias>`,
-`SYNC_DUMP_ENGINE=mysqldump`, and every other `shopware` verb.
+**Dump is not in fyrst-cli.** Database dumps are owned completely by
+`shopware-cli project dump`. This CLI does not provide a dump command and
+does not wrap or shell out to shopware-cli for dump.
 
-This CLI does not reimplement dump, MySQL import, Compose release, or
+**Still stub (exit 2):** `shopware sync snapshot` (points operators at
+shopware-cli for DB; bind-mount volumes remain stub), bind-mount volume
+restore, remote SSH `--from`, and every other `shopware` verb.
+
+This CLI does not reimplement dump, Compose release, or
 `fyrst:sales-channel:rewrite-urls`. Overlay scripts live in
 [fyrst-dev/recipes](https://github.com/fyrst-dev/recipes) (`fyrst/shopware-cd`).
 The console command lives in [fyrst-dev/shopware-cd](https://github.com/fyrst-dev/shopware-cd).
 
 See [docs/ADR-0001-shopware-namespace.md](docs/ADR-0001-shopware-namespace.md),
 [docs/command-matrix.md](docs/command-matrix.md), and
-[docs/manual-snapshot-test.md](docs/manual-snapshot-test.md).
+[docs/manual-db-import-test.md](docs/manual-db-import-test.md).
 
 ## Command tree
 
@@ -36,8 +37,9 @@ See [docs/ADR-0001-shopware-namespace.md](docs/ADR-0001-shopware-namespace.md),
 fyrst-cli shopware init-env
 fyrst-cli shopware release
 fyrst-cli shopware rollback
-fyrst-cli shopware sync snapshot    # local DB dump (this is real)
-fyrst-cli shopware sync restore
+fyrst-cli shopware db import          # SQL import (this is real)
+fyrst-cli shopware sync snapshot       # not a dump; use shopware-cli
+fyrst-cli shopware sync restore        # DB path = same import module
 fyrst-cli shopware sync sync
 fyrst-cli shopware sync-local
 fyrst-cli shopware backup backup
@@ -50,52 +52,76 @@ fyrst-cli shopware backup restore
 | `deploy/init-env.sh` | `fyrst-cli shopware init-env` |
 | `deploy/vps-release.sh` | `fyrst-cli shopware release` |
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware rollback` |
+| — | `fyrst-cli shopware db import` |
 | `deploy/sync-runtime.sh` | `fyrst-cli shopware sync {snapshot\|restore\|sync}` |
 | `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` |
 | `deploy/backup-runtime.sh` | `fyrst-cli shopware backup {backup\|prune\|restore}` |
 
 ```text
 fyrst-cli shopware --help
-fyrst-cli shopware sync snapshot --help
+fyrst-cli shopware db import --help
 ```
 
-## Snapshot (local DB)
+## Dump (shopware-cli only)
+
+Do **not** use fyrst-cli to dump. From a shop checkout with a running Compose
+`mysql` (or `DATABASE_URL`):
+
+```bash
+shopware-cli project dump --skip-lock-tables --compression=gzip --output db.sql.gz
+```
+
+See the [Shopware CLI dump docs](https://developer.shopware.com/docs/products/tools/cli/project-commands/mysql-dump.html)
+and Flex overlay `deploy/lib/sync-dump.sh`.
+
+## Import
 
 Run from the shop checkout (directory with `.env`), or set `COMPOSE_DIR`.
 
 ```bash
-# Print the docker run line (no dump, never prints passwords)
-fyrst-cli shopware sync snapshot --data db --dry-run
+# Print the plan (never prints passwords)
+fyrst-cli shopware db import --file /tmp/db.sql.gz --dry-run
 
-# Dump into <shop>/var/runtime-sync/db.sql.gz
-fyrst-cli shopware sync snapshot --data db
+# Import into bundled Compose mysql (preferred)
+fyrst-cli shopware db import --file /tmp/db.sql.gz
 
-# Custom work directory
-fyrst-cli shopware sync snapshot --data db --snapshot-dir /tmp/sw-snap
+# Uncompressed SQL
+fyrst-cli shopware db import --file ./dump.sql
+
+# Same import via sync restore (looks for <snapshot-dir>/db.sql.gz)
+fyrst-cli shopware sync restore --data db --snapshot-dir /tmp/sw-snap --dry-run
 ```
 
-Required for dump-only:
+Behaviour (aligned with recipes `restore_db_local` / `restore_db_via_url`):
 
-- `SHOPWARE_SHOP_ID` in `.env` (always)
-- `SHOPWARE_DEPLOY_ENV` **or** `COMPOSE_PROJECT_NAME` (network name)
-- Bundled Compose `mysql` service **or** `DATABASE_URL` pointing at a real host
-- `MYSQL_USER`/`MYSQL_PASSWORD` (or `MYSQL_ROOT_PASSWORD`, or user/password in
-  `DATABASE_URL`)
+1. Resolve shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`).
+2. If Compose has a `mysql` service: optional `docker compose … up -d --no-build mysql`,
+   then `gzip -dc` (or the `.sql` file) piped into
+   `docker compose … exec -T mysql` with the mysql/mariadb client inside the
+   container.
+3. Else `DATABASE_URL` to a real host: pipe into a one-shot
+   `mysql:8.4` / `mariadb:11.4` client container (`SYNC_MYSQL_CLIENT_IMAGE`
+   override), `--network host`. `DATABASE_URL` host `mysql` without a compose
+   mysql service is refused.
+4. `--dry-run` prints that plan and does not call Docker.
 
-Dump flags match the Flex overlay (`deploy/lib/sync-dump.sh`):
+Required:
 
-| Env | Default | Effect |
-| --- | --- | --- |
-| `SYNC_DUMP_QUICK` | on (`1`) | `--quick`; set `0` to opt out |
-| `SYNC_DUMP_CLEAN` | on (`1`) | `--clean`; set `0` to opt out |
-| `SYNC_DUMP_ANONYMIZE` | off | `--anonymize` when `1` |
-| `SYNC_SHOPWARE_CLI_IMAGE` | `ghcr.io/shopware/shopware-cli:0.18.4` | one-shot image |
-| `SYNC_DUMP_ENGINE` | `shopware-cli` | `mysqldump` is still a stub |
+- `SHOPWARE_SHOP_ID` in `.env`
+- Bundled Compose `mysql` **or** `DATABASE_URL` pointing at a real host
 
-Default `--data` is `db,media,files,thumbnail,theme,sitemap`. Volume trees are
-not copied yet: the DB dump still runs, and a `not implemented` line is printed
-on stderr. Use `--data db` or `--skip-volumes` to dump without that warning.
-`--from local` (default) only; other aliases error until SSH lands.
+### Live hosts
+
+`SHOPWARE_DEPLOY_ENV=live` (also `SYNC_ENV=live`, checkout directory named
+`live`, or hostname `live`) is refused by default so a casual import cannot
+silently trash production.
+
+- **`db import`:** pass `--allow-live` or set `SYNC_ALLOW_LIVE_RESTORE=1`.
+- **`sync restore`:** same live detection as the overlay; override only with
+  `SYNC_ALLOW_LIVE_RESTORE=1` (not `--allow-live`). Staging/playground/dev
+  do not need extra flags.
+
+Passwords (`MYSQL_PASSWORD`, `DATABASE_URL`) are never printed.
 
 `.env` is parsed as `KEY=VALUE` (quotes stripped, **no shell expansion**).
 
@@ -104,7 +130,7 @@ on stderr. Use `--data db` or `--skip-volumes` to dump without that warning.
 ```bash
 cargo build
 cargo run -- shopware --help
-cargo run -- shopware sync snapshot --help
+cargo run -- shopware db import --help
 cargo test
 ```
 

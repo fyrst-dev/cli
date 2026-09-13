@@ -31,14 +31,74 @@ fn shopware_help_prints_command_tree() {
         "sync",
         "sync-local",
         "backup",
+        "fyrst-cli shopware db import",
         "fyrst-cli shopware sync snapshot",
         "fyrst-cli shopware backup restore",
         "not implemented",
         "shopware-cli",
+        "Dump = shopware-cli",
+        "Import = fyrst-cli",
     ] {
         assert!(
             help.contains(needle),
             "shopware --help missing `{needle}`:\n{help}",
+        );
+    }
+    assert!(
+        !help.contains("sync snapshot` dumps the local DB"),
+        "help still presents snapshot as a dump wrap:\n{help}",
+    );
+}
+
+#[test]
+fn dump_is_absent_from_cli_surface() {
+    let shopware = stdout(&["shopware", "--help"]);
+    let snapshot = stdout(&["shopware", "sync", "snapshot", "--help"]);
+    let db = stdout(&["shopware", "db", "--help"]);
+    let import = stdout(&["shopware", "db", "import", "--help"]);
+
+    assert!(
+        shopware.contains("db import"),
+        "shopware --help missing db import:\n{shopware}",
+    );
+    assert!(
+        snapshot.contains("shopware-cli"),
+        "snapshot --help should point at shopware-cli:\n{snapshot}",
+    );
+    assert!(
+        !snapshot
+            .to_ascii_lowercase()
+            .contains("dump db via shopware-cli"),
+        "snapshot --help still describes wrapping dump:\n{snapshot}",
+    );
+    assert!(db.contains("import"), "shopware db --help:\n{db}");
+    for needle in ["--file", "--dry-run", "--allow-live"] {
+        assert!(
+            import.contains(needle),
+            "import --help missing {needle}:\n{import}"
+        );
+    }
+
+    let dump_verbs = [
+        &["shopware", "dump"][..],
+        &["shopware", "db", "dump"][..],
+        &["shopware", "sync", "dump"][..],
+    ];
+    for args in dump_verbs {
+        let out = run(args);
+        assert_ne!(
+            out.status.code(),
+            Some(0),
+            "unexpected dump verb success for {args:?}"
+        );
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !combined.contains("project dump") || out.status.code() != Some(0),
+            "dump wrap surfaced for {args:?}: {combined}"
         );
     }
 }
@@ -76,7 +136,6 @@ fn stubs_exit_2_with_not_implemented() {
         &["shopware", "init-env", "--shop-id", "acme"],
         &["shopware", "release"],
         &["shopware", "rollback"],
-        &["shopware", "sync", "restore"],
         &["shopware", "sync", "sync"],
         &["shopware", "sync-local"],
         &["shopware", "backup", "backup"],

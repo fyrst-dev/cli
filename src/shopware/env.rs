@@ -132,6 +132,7 @@ pub fn require_shop_id(env: &ShopEnv) -> Result<String, Error> {
 }
 
 /// `(project_name, derived_from_shop_id_and_env)`.
+#[allow(dead_code)]
 pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
     if let Some(n) = env.get("COMPOSE_PROJECT_NAME") {
         return Ok((n.to_string(), false));
@@ -139,8 +140,29 @@ pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
     match (env.get("SHOPWARE_SHOP_ID"), env.get("SHOPWARE_DEPLOY_ENV")) {
         (Some(id), Some(deploy_env)) => Ok((format!("{id}-{deploy_env}"), true)),
         _ => Err(Error::fail(
-            "Set COMPOSE_PROJECT_NAME in .env (must be unique on this Docker host), or set SHOPWARE_SHOP_ID and SHOPWARE_DEPLOY_ENV to derive ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}. Dump-only still needs one of those so the Compose network name (${COMPOSE_PROJECT_NAME}_default) can be derived.",
+            "Set COMPOSE_PROJECT_NAME in .env (must be unique on this Docker host), or set SHOPWARE_SHOP_ID and SHOPWARE_DEPLOY_ENV to derive ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}.",
         )),
+    }
+}
+
+/// Work directory for sync snapshot/restore (`--snapshot-dir` or `SYNC_SNAPSHOT_DIR`).
+pub fn resolve_snapshot_dir(cli_dir: Option<&str>, env: &ShopEnv, compose_dir: &Path) -> PathBuf {
+    if let Some(d) = cli_dir.map(str::trim).filter(|s| !s.is_empty()) {
+        let p = PathBuf::from(d);
+        if p.is_absolute() {
+            p
+        } else {
+            compose_dir.join(p)
+        }
+    } else if let Some(d) = env.get("SYNC_SNAPSHOT_DIR") {
+        let p = PathBuf::from(d);
+        if p.is_absolute() {
+            p
+        } else {
+            compose_dir.join(p)
+        }
+    } else {
+        compose_dir.join("var/runtime-sync")
     }
 }
 
@@ -325,5 +347,24 @@ services:
         assert!(is_local_source(Some("LOCAL")));
         assert!(is_local_source(Some("this")));
         assert!(!is_local_source(Some("live")));
+    }
+
+    #[test]
+    fn snapshot_dir_flag_relative_and_default() {
+        let mut vars = HashMap::new();
+        vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
+        assert_eq!(
+            resolve_snapshot_dir(None, &env, Path::new("/shop")),
+            PathBuf::from("/shop/var/runtime-sync")
+        );
+        assert_eq!(
+            resolve_snapshot_dir(Some("tmp/s"), &env, Path::new("/shop")),
+            PathBuf::from("/shop/tmp/s")
+        );
+        assert_eq!(
+            resolve_snapshot_dir(Some("/abs/s"), &env, Path::new("/shop")),
+            PathBuf::from("/abs/s")
+        );
     }
 }

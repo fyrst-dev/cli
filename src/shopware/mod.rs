@@ -1,22 +1,40 @@
 //! Shopware CD dispatch.
 //!
-//! `shopware sync snapshot` dumps the local DB via `shopware-cli project dump`
-//! (one-shot official CLI image on the Compose network). Other verbs stay stubs
-//! until recipe wrappers exist. See docs/ADR-0001-shopware-namespace.md.
+//! Database **dump** is owned by `shopware-cli project dump` — this CLI never
+//! wraps it. Database **import** is `fyrst-cli shopware db import` (also used
+//! by `shopware sync restore --data db`). Other verbs stay stubs until recipe
+//! wrappers exist. See docs/ADR-0001-shopware-namespace.md.
 
 mod data;
-mod dump;
 mod env;
 mod envfile;
 mod error;
+mod import;
+mod live;
+mod mysql;
+mod restore;
 mod snapshot;
 
-use crate::cli::{BackupCommand, ShopwareArgs, ShopwareCommand, SyncCommand};
+use crate::cli::{BackupCommand, DbCommand, ShopwareArgs, ShopwareCommand, SyncCommand};
 use std::process::ExitCode;
 
 pub fn run(args: ShopwareArgs) -> ExitCode {
     match args.command {
+        ShopwareCommand::Db(DbCommand::Import(op)) => match import::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
         ShopwareCommand::Sync(SyncCommand::Snapshot(op)) => match snapshot::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
+        ShopwareCommand::Sync(SyncCommand::Restore(op)) => match restore::run(op) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 e.print();
@@ -26,7 +44,6 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
         ShopwareCommand::InitEnv(_) => not_implemented("shopware init-env"),
         ShopwareCommand::Release(_) => not_implemented("shopware release"),
         ShopwareCommand::Rollback(_) => not_implemented("shopware rollback"),
-        ShopwareCommand::Sync(SyncCommand::Restore(_)) => not_implemented("shopware sync restore"),
         ShopwareCommand::Sync(SyncCommand::Sync(_)) => not_implemented("shopware sync sync"),
         ShopwareCommand::SyncLocal(_) => not_implemented("shopware sync-local"),
         ShopwareCommand::Backup(BackupCommand::Backup(_)) => {
