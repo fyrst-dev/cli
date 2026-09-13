@@ -9,7 +9,8 @@
 //! `sync restore` restores DB, volumes, and opt-in rewrite.
 //! `shopware sync sync` pulls bind-mounts over SSH and imports an existing dump
 //! (does not dump). `shopware sync-local` rsyncs VPS upload trees into a local
-//! project-dev checkout (never DB).
+//! project-dev checkout (never DB). `shopware backup backup` copies bind-mount
+//! trees (live allowed) and an operator-provided dump file.
 
 mod cli;
 mod shopware;

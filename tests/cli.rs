@@ -38,6 +38,7 @@ fn shopware_help_prints_command_tree() {
         "shopware-cli",
         "Dump = shopware-cli",
         "Import = fyrst-cli",
+        "Backup = fyrst-cli shopware backup backup",
     ] {
         assert!(
             help.contains(needle),
@@ -133,7 +134,6 @@ fn backup_help_lists_backup_prune_restore() {
 #[test]
 fn stubs_exit_2_with_not_implemented() {
     let cases: &[&[&str]] = &[
-        &["shopware", "backup", "backup"],
         &["shopware", "backup", "prune"],
         &["shopware", "backup", "restore"],
     ];

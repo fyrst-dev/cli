@@ -7,7 +7,7 @@
 
 use super::env::{derive_project_name, have_cmd, ShopEnv};
 
-pub use super::env::archive_image;
+pub use super::env::{archive_image, DEFAULT_ARCHIVE_IMAGE};
 use super::error::Error;
 use super::mysql::{require_docker, require_gzip, verify_gzip_magic};
 use super::ssh::{
@@ -55,6 +55,137 @@ pub fn bind_item_dir(root: &Path, logical: &str) -> PathBuf {
 
 pub fn volume_docker_name(project: &str, logical: &str) -> String {
     format!("{project}_{logical}")
+}
+
+pub fn command_exists(name: &str) -> bool {
+    Command::new("sh")
+        .args(["-c", "command -v \"$0\" >/dev/null 2>&1", name])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Snapshot one bind-mount (or named-volume fallback) into a backup artifact.
+pub fn snapshot_bind_local(
+    logical: &str,
+    data_root: &Path,
+    artifact: &Path,
+    project_name: &str,
+    archive_image: &str,
+    dry_run: bool,
+) -> Result<(), Error> {
+    let src = bind_item_dir(data_root, logical);
+    let dest = artifact.join("data").join(logical);
+    if src.is_dir() {
+        println!(
+            "==> Snapshot bind mount {} → {}",
+            src.display(),
+            dest.display()
+        );
+        if dry_run {
+            if command_exists("rsync") {
+                println!(
+                    "==> DRY-RUN rsync {}/ {}/",
+                    src.display(),
+                    dest.display()
+                );
+            } else {
+                println!(
+                    "==> DRY-RUN cp -a {}/. {}/",
+                    src.display(),
+                    dest.display()
+                );
+            }
+            return Ok(());
+        }
+        if have_cmd("rsync") {
+            rsync_local_trees(&src, &dest)?;
+        } else {
+            copy_tree_replace(&src, &dest)?;
+        }
+        return Ok(());
+    }
+
+    println!(
+        "==> Bind mount {} missing; trying named volume",
+        src.display()
+    );
+    archive_named_volume_into_artifact(
+        logical,
+        data_root,
+        artifact,
+        project_name,
+        archive_image,
+        dry_run,
+    )
+}
+
+fn archive_named_volume_into_artifact(
+    logical: &str,
+    data_root: &Path,
+    artifact: &Path,
+    project_name: &str,
+    archive_image: &str,
+    dry_run: bool,
+) -> Result<(), Error> {
+    let vol = volume_docker_name(project_name, logical);
+    let volumes_dir = artifact.join("volumes");
+    let tarout = volumes_dir.join(format!("{logical}.tar.gz"));
+    println!(
+        "==> Archiving named volume {vol} → {} (bind-mount fallback)",
+        tarout.display()
+    );
+    if dry_run {
+        println!(
+            "==> DRY-RUN docker run --rm -v {vol}:/from:ro -v {}:/to {archive_image} tar",
+            volumes_dir.display()
+        );
+        return Ok(());
+    }
+
+    let inspect = Command::new("docker")
+        .args(["volume", "inspect", &vol])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !inspect {
+        let src = bind_item_dir(data_root, logical);
+        return Err(Error::fail(format!(
+            "Named volume '{vol}' not found and bind-mount {} is missing. mkdir -p {}/{{files,media,thumbnail,theme,sitemap}} && chown 82:82 (see deploy/README.md).",
+            src.display(),
+            data_root.display()
+        )));
+    }
+
+    fs::create_dir_all(&volumes_dir)
+        .map_err(|e| Error::fail(format!("cannot create {}: {e}", volumes_dir.display())))?;
+
+    let status = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{vol}:/from:ro"),
+            "-v",
+            &format!("{}:/to", volumes_dir.display()),
+            archive_image,
+            "tar",
+            "-C",
+            "/from",
+            "-czf",
+            &format!("/to/{logical}.tar.gz"),
+            ".",
+        ])
+        .status()
+        .map_err(|e| Error::fail(format!("could not exec docker: {e}")))?;
+    if !status.success() {
+        return Err(Error::fail(format!(
+            "docker tar of named volume {vol} failed"
+        )));
+    }
+    gzip_test(&tarout)
 }
 
 pub fn plan_local_volumes(
@@ -172,7 +303,7 @@ pub fn execute_volume(action: &VolumeAction, dry_run: bool, env: &ShopEnv) -> Re
         return Ok(());
     }
     match &action.transport {
-        VolumeTransport::LocalBind { src, dest } => snapshot_bind_local(src, dest),
+        VolumeTransport::LocalBind { src, dest } => snapshot_bind_tree(src, dest),
         VolumeTransport::LocalNamedVolume {
             volume,
             tar_out,
@@ -200,7 +331,7 @@ pub fn execute_volume(action: &VolumeAction, dry_run: bool, env: &ShopEnv) -> Re
     }
 }
 
-fn snapshot_bind_local(src: &Path, dest: &Path) -> Result<(), Error> {
+fn snapshot_bind_tree(src: &Path, dest: &Path) -> Result<(), Error> {
     if have_cmd("rsync") {
         rsync_local_trees(src, dest)
     } else {
@@ -1162,5 +1293,21 @@ mod tests {
             "DRY-RUN rsync -az --delete deploy@live.example.com:/var/lib/shopware/data/acme/live/media/ /var/lib/shopware/data/acme/staging/media/; chown 82:82"
         );
         assert!(!line.contains("project dump"));
+    }
+
+    #[test]
+    fn snapshot_bind_dry_run_missing_uses_named_volume_plan() {
+        let root = temp_dir("missing-art");
+        snapshot_bind_local(
+            "media",
+            &root.join("no-data"),
+            &root.join("art"),
+            "acme-live",
+            DEFAULT_ARCHIVE_IMAGE,
+            true,
+        )
+        .unwrap();
+        assert!(!root.join("art/data/media").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -26,7 +26,8 @@ Delegated tools:
 | `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync restore` | — | same flags | **implemented**: DB via same import module; bind-mount volumes from `data/<item>/` or `volumes/<item>.tar.gz`; stop/start `web`/`worker`/`scheduler`; opt-in rewrite via compose `web`; live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1`; rewrite never on live |
 | `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync sync` | — | same flags | **implemented** (pull orchestration): rsync remote bind-mounts; DB imports an already-present dump (does **not** dump). Live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1` |
 | `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | **implemented** (VPS → local project-dev rsync; never DB; never `SHOPWARE_DATA_ROOT`) |
-| `deploy/backup-runtime.sh` | `fyrst-cli shopware backup` | `backup`, `prune`, `restore` | `--data`, `--dry-run`; restore also `--from`, `--i-understand-this-restores-this-host` | stub (exit 2) |
+| `deploy/backup-runtime.sh` backup | `fyrst-cli shopware backup backup` | `backup` | `--data`, `--dry-run` | **implemented** (volumes + operator `db.sql.gz`; **not** a dump wrap; live allowed) |
+| `deploy/backup-runtime.sh` prune / restore | `fyrst-cli shopware backup` | `prune`, `restore` | `--data`, `--dry-run`; restore also `--from`, `--i-understand-this-restores-this-host` | stub (exit 2) |
 
 `shopware sync` with no verb, `shopware backup` with no verb, and
 `shopware db` with no verb, require a subcommand (clap prints help, exit 2).
@@ -387,6 +388,67 @@ SSH env (not clap): `SYNC_SSH_HOST` (default `--from` alias), `SYNC_SSH_USER`,
 per-alias `SYNC_<ALIAS>_SSH_*` / `SYNC_<ALIAS>_DATA_ROOT`. Passwords are never
 logged.
 
+## Exact backup CLI
+
+```text
+fyrst-cli shopware backup backup [--data LIST] [--dry-run]
+```
+
+Default `--data`: `db,media,files,thumbnail,theme,sitemap`.
+
+Required env: `BACKUP_TARGET` (local path, second disk, or SSH
+`user@host:/path` / `ssh://user@host:22/abs/path`). Also `BACKUP_KEEP_DAYS`
+(default 14, `0` = keep forever), `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`.
+Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`. Optional
+`BACKUP_DB_DUMP` = path to an already-made `db.sql.gz` (or `.sql`) to copy
+into the artifact. Overlay `deploy/backup.env` is loaded; process-env
+`BACKUP_*` values win when non-empty.
+
+Layout on `BACKUP_TARGET`:
+
+```text
+$BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/YYYYMMDDTHHMMSSZ/
+  db.sql.gz                 # operator / shopware-cli, not fyrst-cli dump
+  data/media/ …
+  BACKUP_MANIFEST.txt
+  SHA256SUMS                # when sha256sum exists
+```
+
+## `shopware backup backup` (implemented)
+
+Off-host backup of runtime artifacts. Sync is **not** a backup. Live
+(`SHOPWARE_DEPLOY_ENV=live`) is allowed and expected (cron on live).
+
+Divergence from overlay `backup-runtime.sh`: the overlay execs
+`sync-runtime.sh snapshot` (which dumps). fyrst-cli **never** wraps
+`shopware-cli project dump` and never shells out to shopware-cli.
+
+1. Resolve shop root; load `.env`, `.env.prod`, `deploy/sync.env`,
+   `deploy/backup.env`. Require `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`,
+   `BACKUP_TARGET`.
+2. Lock overlapping runs (`var/backup-runtime.lock` / flock).
+3. Copy selected bind-mount trees from
+   `$SHOPWARE_DATA_ROOT/<item>/` (or derived
+   `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV`) into
+   `data/<item>/`. Missing bind-mounts fall back to a named-volume tar
+   (`${COMPOSE_PROJECT_NAME}_<item>`, `SYNC_ARCHIVE_IMAGE`, default
+   `alpine:3.20`). Local target writes the timestamped dir in place; SSH
+   target builds under `<shop>/var/backup-work/<stamp>` then rsyncs.
+4. If `--data` includes `db`: **do not dump**. `--dry-run` prints
+   “run shopware-cli project dump yourself”. Execute copies `BACKUP_DB_DUMP`
+   into the artifact as `db.sql.gz` (or `db.sql`). Missing dump **fails**
+   (exit 1) with that instruction — it does not wrap shopware-cli.
+5. Write `BACKUP_MANIFEST.txt` and `SHA256SUMS` (when `sha256sum` exists).
+6. After a successful artifact, run the in-process retention helper
+   (same stamp cutoff as overlay `prune_artifacts`: delete
+   `YYYYMMDDTHHMMSSZ` dirs older than `BACKUP_KEEP_DAYS` UTC days;
+   `0` keeps forever; non-matching names are left alone). Standalone
+   `fyrst-cli shopware backup prune` remains a stub (#10).
+
+`--dry-run` prints the stamp path, volume copy plan, dump instruction (if
+db selected), manifest/checksum plan, and prune actions. It does not copy,
+dump, SSH, or delete.
+
 ## Environment (not clap flags)
 
 Scripts and this CLI read shop identity and secrets from the environment /
@@ -406,7 +468,7 @@ shop-root `.env`. Names match the overlay:
 | Sync-local | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_<ALIAS>_SSH_*`, `SYNC_<ALIAS>_DATA_ROOT` |
 | Sync pull | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_PATH`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_DATA_ROOT`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_SSH_*` / `SYNC_<ALIAS>_REMOTE_PATH` / `SYNC_<ALIAS>_DATA_ROOT` |
 | Sync rewrite | `SYNC_REWRITE_APP_URL`, `SYNC_REWRITE_URL_MAP`, `SYNC_APP_URL`, `SYNC_POST_RESTORE_CMD` |
-| Backup (future) | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS`, `BACKUP_SSH_KEY`, `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
+| Backup | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS`, `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`, `BACKUP_DB_DUMP`; restore later: `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
 
 ## Future wrappers (not done here)
 

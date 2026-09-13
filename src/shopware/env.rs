@@ -23,6 +23,16 @@ const IDENTITY_KEYS: &[&str] = &[
     "SYNC_REMOTE_DATA_ROOT",
 ];
 
+/// Process-env wins (non-empty) after `deploy/backup.env`, matching
+/// `backup-runtime.sh` PRESET_BACKUP_* restoration.
+pub const BACKUP_PRESET_KEYS: &[&str] = &[
+    "BACKUP_TARGET",
+    "BACKUP_KEEP_DAYS",
+    "BACKUP_SSH_KEY",
+    "BACKUP_SSH_PORT",
+    "BACKUP_DB_DUMP",
+];
+
 const ENV_FILES: &[&str] = &[".env", ".env.prod", "deploy/sync.env"];
 
 /// Overlay `sync-runtime-local.sh` sources shop-root `.env` then `deploy/sync.env`
@@ -120,6 +130,34 @@ impl ShopEnv {
             .get(key)
             .map(String::as_str)
             .filter(|s| !s.is_empty())
+    }
+
+    pub fn merge_env_file(&mut self, path: &Path) -> Result<(), Error> {
+        if !path.is_file() {
+            return Ok(());
+        }
+        let contents = fs::read_to_string(path)
+            .map_err(|e| Error::fail(format!("cannot read {}: {e}", path.display())))?;
+        for (k, v) in parse_env_file(&contents) {
+            self.vars.insert(k, v);
+        }
+        Ok(())
+    }
+
+    pub fn restore_process_presets(&mut self, process: &HashMap<String, String>, keys: &[&str]) {
+        for key in keys {
+            if let Some(preset) = process.get(*key).filter(|s| !s.is_empty()) {
+                self.vars.insert((*key).to_string(), preset.clone());
+            }
+        }
+    }
+
+    /// Overlay `deploy/backup.env` then process-env BACKUP_* / identity presets.
+    pub fn load_backup_overlay(&mut self, process: &HashMap<String, String>) -> Result<(), Error> {
+        self.merge_env_file(&self.compose_dir.join("deploy/backup.env"))?;
+        self.restore_process_presets(process, IDENTITY_KEYS);
+        self.restore_process_presets(process, BACKUP_PRESET_KEYS);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -228,6 +266,16 @@ pub fn require_shop_id(env: &ShopEnv) -> Result<String, Error> {
         })
 }
 
+pub fn require_deploy_env(env: &ShopEnv) -> Result<String, Error> {
+    env.get("SHOPWARE_DEPLOY_ENV")
+        .map(str::to_string)
+        .ok_or_else(|| {
+            Error::fail(
+                "SHOPWARE_DEPLOY_ENV is required (live|staging|playground|dev). Set it in shop-root .env.",
+            )
+        })
+}
+
 pub const DEFAULT_ARCHIVE_IMAGE: &str = "alpine:3.20";
 
 /// `(project_name, derived_from_shop_id_and_env)`.
@@ -303,6 +351,14 @@ pub fn local_data_root(env: &ShopEnv) -> Result<(PathBuf, bool), Error> {
 /// Alias used by `sync restore` (same resolution as snapshot).
 pub fn resolve_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
     derive_local_data_root(env)
+}
+
+/// Backup bind-mount root: `SHOPWARE_DATA_ROOT` or `$SHOPWARE_DATA_BASE/$shop_id/$deploy_env`.
+pub fn resolve_backup_data_root(env: &ShopEnv, shop_id: &str, deploy_env: &str) -> (PathBuf, bool) {
+    if let Some(root) = env.get("SHOPWARE_DATA_ROOT") {
+        return (PathBuf::from(root), false);
+    }
+    (derived_data_root(env, shop_id, deploy_env), true)
 }
 
 /// Remote env directory (`SYNC_SOURCE_ENV`, else `--from` alias, else `live`).
@@ -649,5 +705,28 @@ COMPOSE_PROFILES=redis
             err.to_string().contains("Cannot cd to COMPOSE_DIR="),
             "{err}"
         );
+    }
+
+    #[test]
+    fn backup_env_file_then_process_wins() {
+        let shop = temp_shop("backup-env");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=live\n",
+        )
+        .unwrap();
+        fs::create_dir_all(shop.join("deploy")).unwrap();
+        fs::write(
+            shop.join("deploy/backup.env"),
+            "BACKUP_TARGET=/from-file\nBACKUP_KEEP_DAYS=7\n",
+        )
+        .unwrap();
+        let mut process = HashMap::new();
+        process.insert("BACKUP_TARGET".into(), "/from-proc".into());
+        let mut env = ShopEnv::load(shop.clone(), &process).unwrap();
+        env.load_backup_overlay(&process).unwrap();
+        assert_eq!(env.get("BACKUP_TARGET"), Some("/from-proc"));
+        assert_eq!(env.get("BACKUP_KEEP_DAYS"), Some("7"));
+        let _ = fs::remove_dir_all(&shop);
     }
 }
