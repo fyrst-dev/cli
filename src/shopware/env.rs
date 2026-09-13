@@ -57,6 +57,7 @@ pub const COMPOSE_FILES: &[&str] = &[
 /// Overlay `DEFAULT_DATA_BASE` (`deploy/lib/identity.sh`).
 pub const DEFAULT_DATA_BASE: &str = "/var/lib/shopware/data";
 
+#[derive(Debug)]
 pub struct ShopEnv {
     pub compose_dir: PathBuf,
     vars: HashMap<String, String>,
@@ -215,6 +216,8 @@ pub fn require_shop_id(env: &ShopEnv) -> Result<String, Error> {
         })
 }
 
+pub const DEFAULT_ARCHIVE_IMAGE: &str = "alpine:3.20";
+
 /// `(project_name, derived_from_shop_id_and_env)`.
 pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
     if let Some(n) = env.get("COMPOSE_PROJECT_NAME") {
@@ -246,6 +249,67 @@ pub fn resolve_snapshot_dir(cli_dir: Option<&str>, env: &ShopEnv, compose_dir: &
         }
     } else {
         compose_dir.join("var/runtime-sync")
+    }
+}
+
+pub fn data_base(env: &ShopEnv) -> &str {
+    env.get("SHOPWARE_DATA_BASE").unwrap_or(DEFAULT_DATA_BASE)
+}
+
+pub fn archive_image(env: &ShopEnv) -> String {
+    env.get("SYNC_ARCHIVE_IMAGE")
+        .unwrap_or(DEFAULT_ARCHIVE_IMAGE)
+        .to_string()
+}
+
+pub fn derived_data_root(env: &ShopEnv, shop_id: &str, deploy_env: &str) -> PathBuf {
+    PathBuf::from(data_base(env)).join(shop_id).join(deploy_env)
+}
+
+/// Bind-mount root on this host (`SYNC_DATA_ROOT` / `SHOPWARE_DATA_ROOT` / derived).
+pub fn derive_local_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
+    if let Some(p) = env.get("SYNC_DATA_ROOT") {
+        return Ok(PathBuf::from(p));
+    }
+    if let Some(p) = env.get("SHOPWARE_DATA_ROOT") {
+        return Ok(PathBuf::from(p));
+    }
+    let shop_id = require_shop_id(env)?;
+    let deploy_env = env.get("SHOPWARE_DEPLOY_ENV").ok_or_else(|| {
+        Error::fail(
+            "SHOPWARE_DEPLOY_ENV is required to derive SHOPWARE_DATA_ROOT (live|staging|playground|dev). Set it in .env, or set SHOPWARE_DATA_ROOT / SYNC_DATA_ROOT explicitly.",
+        )
+    })?;
+    Ok(derived_data_root(env, &shop_id, deploy_env))
+}
+
+/// Remote env directory (`SYNC_SOURCE_ENV`, else `--from` alias, else `live`).
+pub fn source_env_for_remote(from: &str, env: &ShopEnv) -> String {
+    if let Some(s) = env.get("SYNC_SOURCE_ENV") {
+        return s.to_string();
+    }
+    let from_lc = from.trim().to_ascii_lowercase();
+    if !from_lc.is_empty() && from_lc != "local" && from_lc != "this" {
+        from_lc
+    } else {
+        "live".into()
+    }
+}
+
+pub fn have_cmd(name: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(name).is_file())
+}
+
+pub fn require_cmd(name: &str) -> Result<(), Error> {
+    if have_cmd(name) {
+        Ok(())
+    } else {
+        Err(Error::fail(format!(
+            "Missing command '{name}'. Install docker, bash, openssh-client, gzip, and rsync on this host."
+        )))
     }
 }
 
@@ -462,6 +526,50 @@ COMPOSE_PROFILES=redis
         assert!(is_local_source(Some("LOCAL")));
         assert!(is_local_source(Some("this")));
         assert!(!is_local_source(Some("live")));
+    }
+
+    #[test]
+    fn local_data_root_prefers_sync_then_shopware_then_derived() {
+        let mut vars = HashMap::new();
+        vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
+        vars.insert("SHOPWARE_DEPLOY_ENV".into(), "staging".into());
+        vars.insert("SHOPWARE_DATA_ROOT".into(), "/data/shopware".into());
+        vars.insert("SYNC_DATA_ROOT".into(), "/override".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
+        assert_eq!(
+            derive_local_data_root(&env).unwrap(),
+            PathBuf::from("/override")
+        );
+
+        let mut vars = HashMap::new();
+        vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
+        vars.insert("SHOPWARE_DEPLOY_ENV".into(), "staging".into());
+        vars.insert("SHOPWARE_DATA_ROOT".into(), "/data/shopware".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
+        assert_eq!(
+            derive_local_data_root(&env).unwrap(),
+            PathBuf::from("/data/shopware")
+        );
+
+        let mut vars = HashMap::new();
+        vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
+        vars.insert("SHOPWARE_DEPLOY_ENV".into(), "live".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
+        assert_eq!(
+            derive_local_data_root(&env).unwrap(),
+            PathBuf::from("/var/lib/shopware/data/acme/live")
+        );
+    }
+
+    #[test]
+    fn remote_source_env_from_from_alias() {
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), HashMap::new());
+        assert_eq!(source_env_for_remote("live", &env), "live");
+        assert_eq!(source_env_for_remote("staging", &env), "staging");
+        let mut vars = HashMap::new();
+        vars.insert("SYNC_SOURCE_ENV".into(), "playground".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
+        assert_eq!(source_env_for_remote("live", &env), "playground");
     }
 
     #[test]

@@ -26,6 +26,7 @@ Import = fyrst-cli shopware db import (also used by sync restore --data db).
 init-env = fyrst-cli shopware init-env (shop-root .env after create + Flex).
 Release = fyrst-cli shopware release (VPS compose; never builds).
 Rollback = fyrst-cli shopware rollback (IMAGE_TAG from .previous-tag).
+Snapshot volumes = fyrst-cli shopware sync snapshot (bind-mount trees; not a dump).
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
@@ -41,8 +42,8 @@ Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap
 `shopware db import` loads a .sql / .sql.gz via the MySQL/MariaDB client. \
 `shopware release` pulls IMAGE:IMAGE_TAG and recreates the VPS Compose stack (never builds). \
 `shopware rollback` re-deploys IMAGE using IMAGE_TAG from `.previous-tag`. \
-`shopware sync snapshot` is not a dump command. Other shopware subcommands still exit 2 \
-with \"not implemented\".",
+`shopware sync snapshot` copies bind-mount / volume trees; it is not a dump command. \
+Other shopware subcommands still exit 2 with \"not implemented\".",
     arg_required_else_help = true,
     subcommand_required = true,
     propagate_version = true
@@ -73,6 +74,7 @@ Passwords and APP_SECRET are never printed.\n\n\
 one-shot client image for DATABASE_URL). `sync restore --data db` uses the same module. \
 `release` is implemented: VPS `docker compose` pull + recreate \
 (`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`). Never builds images. \
+`sync snapshot` copies bind-mount trees into --snapshot-dir/data/<item>/; it does not dump. \
 Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
 `rollback` is implemented: same compose files and order as `vps-release.sh`, with \
 IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).\n\n\
@@ -210,7 +212,7 @@ pub struct DbImportArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum SyncCommand {
-    /// Not a dump command: use shopware-cli project dump; volumes are stub
+    /// Bind-mount trees into --snapshot-dir; dump stays shopware-cli
     Snapshot(SyncOpArgs),
     /// Load --snapshot-dir into this host's DB (same import as `db import`)
     Restore(SyncOpArgs),

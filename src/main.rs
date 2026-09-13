@@ -5,7 +5,8 @@
 //! import is `fyrst-cli shopware db import` (MySQL client via Compose exec or
 //! a one-shot client image). VPS release is `fyrst-cli shopware release`.
 //! Rollback is `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`).
-//! Other shopware verbs still exit 2 except `sync restore` for the DB path.
+//! `shopware sync snapshot` copies bind-mount trees (not a dump). Other
+//! shopware verbs still exit 2 except `sync restore` for the DB path.
 
 mod cli;
 mod shopware;

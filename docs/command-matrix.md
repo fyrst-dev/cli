@@ -22,7 +22,7 @@ Delegated tools:
 | `deploy/vps-release.sh` | `fyrst-cli shopware release` | — | `--dry-run`, `--skip-pull` | **implemented** |
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware rollback` | — | `--dry-run`, `--skip-pull` | **implemented** |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
-| `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync snapshot` | — | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **not a dump command** (exit 2): use `shopware-cli project dump`; bind-mount volumes stub |
+| `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync snapshot` | — | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **volumes implemented** (bind-mount trees → `--snapshot-dir/data/<item>/`; named-volume tar fallback). **Not a dump command:** `--data db` exits 2 and tells operators to run `shopware-cli project dump` |
 | `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync restore` | — | same flags | **DB path implemented** (same import module; `--snapshot-dir/db.sql.gz`); volumes stub; live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1` |
 | `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync sync` | — | same flags | stub (exit 2) |
 | `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | stub (exit 2) |
@@ -189,12 +189,43 @@ hostname equal to `live`, case-insensitive):
 
 Staging / playground / dev need no extra flag.
 
-## `shopware sync snapshot`
+## `shopware sync snapshot` (volumes implemented; not a dump)
 
-Not implemented as a dump. Exit 2 with a message to run
-`shopware-cli project dump` and to import with `shopware db import`. Remote
-`--from` and bind-mount volume copy also exit 2. fyrst-cli does not invoke
-shopware-cli.
+Copies bind-mount trees (`media`, `files`, `thumbnail`, `theme`, `sitemap`)
+into `--snapshot-dir/data/<item>/`. Default `--snapshot-dir` is
+`<shop>/var/runtime-sync`. Default `--from` is `local`. Default `--data` is
+`db,media,files,thumbnail,theme,sitemap`.
+
+This is **not** a dump command. fyrst-cli never runs
+`docker run … shopware-cli project dump` and never wraps
+`SYNC_DUMP_ENGINE=mysqldump`.
+
+```text
+fyrst-cli shopware sync snapshot [--from ALIAS] [--data LIST] [--snapshot-dir DIR] [--dry-run] [--skip-db] [--skip-volumes]
+```
+
+| `--data` | Behaviour |
+| --- | --- |
+| volumes only (`--skip-db` or `--data media,files,…`) | Copy trees; exit 0. `--dry-run` prints the rsync/tar plan and does not copy. |
+| `db` only / `--skip-volumes` | Exit 2. Message to run `shopware-cli project dump` and import with `fyrst-cli shopware db import`. Not a silent success. |
+| `all` (db + volumes) | Copy volumes **and** remind the operator to dump with shopware-cli into `--snapshot-dir/db.sql.gz`. Must not wrap dump. |
+| `mysql_data` / `redis_data` | Refused (exit 1). |
+
+Local: rsync (or a tree copy if rsync is missing) from
+`$SYNC_DATA_ROOT` / `$SHOPWARE_DATA_ROOT` / derived
+`$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/<item>`
+into `--snapshot-dir/data/<item>/`. If the bind-mount directory is missing,
+named-volume fallback `${COMPOSE_PROJECT_NAME}_<item>` via
+`SYNC_ARCHIVE_IMAGE` (default `alpine:3.20`) writes
+`--snapshot-dir/volumes/<item>.tar.gz`.
+
+Remote `--from <alias>`: SSH + rsync (or tar over SSH) from
+`SYNC_REMOTE_DATA_ROOT` / `SYNC_<ALIAS>_DATA_ROOT` / derived
+`$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SYNC_SOURCE_ENV`. Requires
+`SYNC_REMOTE_PATH` (or `SYNC_<ALIAS>_REMOTE_PATH`). Does **not** SSH-run
+the overlay snapshot script (that would dump). Does not dump on the remote.
+
+Object storage (S3) is out of scope. Dump remains shopware-cli.
 
 ## Environment (not clap flags)
 
@@ -209,7 +240,8 @@ shop-root `.env`. Names match the overlay:
 | Dump (shopware-cli / overlay only) | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `SYNC_SHOPWARE_CLI_IMAGE`, `SYNC_DUMP_ENGINE`, `SYNC_DUMP_QUICK`, `SYNC_DUMP_CLEAN`, `SYNC_DUMP_ANONYMIZE` |
 | Release | `IMAGE`, `IMAGE_TAG` (release / `.env`; **ignored on rollback**), `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |
 | Rollback | `.previous-tag` is the only `IMAGE_TAG`; same optional env as release except `ROLLBACK_ON_SMOKE_FAIL` |
-| Sync (future) | other `SYNC_*` (SSH, rewrite URL / map) |
+| Snapshot volumes | `SYNC_DATA_ROOT`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_REMOTE_PATH`, `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_*` |
+| Sync (future) | other `SYNC_*` (rewrite URL / map) |
 | Backup (future) | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS`, `BACKUP_SSH_KEY`, `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
 
 ## Future wrappers (not done here)
