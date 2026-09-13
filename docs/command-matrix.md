@@ -11,7 +11,7 @@ Delegated tools:
 | **DB dump** | **`shopware-cli project dump` only.** fyrst-cli does not dump, wrap dump, or shell out to shopware-cli. |
 | **DB import** | **`fyrst-cli shopware db import`** (MySQL/MariaDB client). shopware-cli has no import. |
 | VPS release | **`fyrst-cli shopware release`** (`docker compose` with `deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`) |
-| VPS rollback | `docker compose` (same files; `fyrst-cli shopware rollback` is still a stub) |
+| VPS rollback | **`fyrst-cli shopware rollback`** (same compose files; `IMAGE_TAG` from `.previous-tag`) |
 | Opt-in URL rewrite after restore | `bin/console fyrst:sales-channel:rewrite-urls` via compose `web` |
 
 ## Map
@@ -20,7 +20,7 @@ Delegated tools:
 | --- | --- | --- | --- | --- |
 | `deploy/init-env.sh` | `fyrst-cli shopware init-env` | — | `--shop-id`, `--env`, `--image`, `--vps`, `--generate-app-secret`, `--dry-run` | **implemented** |
 | `deploy/vps-release.sh` | `fyrst-cli shopware release` | — | `--dry-run`, `--skip-pull` | **implemented** |
-| `deploy/vps-rollback.sh` | `fyrst-cli shopware rollback` | — | `--dry-run`, `--skip-pull` | stub (exit 2) |
+| `deploy/vps-rollback.sh` | `fyrst-cli shopware rollback` | — | `--dry-run`, `--skip-pull` | **implemented** |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
 | `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync snapshot` | — | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **not a dump command** (exit 2): use `shopware-cli project dump`; bind-mount volumes stub |
 | `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync restore` | — | same flags | **DB path implemented** (same import module; `--snapshot-dir/db.sql.gz`); volumes stub; live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1` |
@@ -81,8 +81,8 @@ compile flags stay in the setup helper image.
 Loud warning (does not auto-enable) when `SHOPWARE_DEPLOY_ENV=live` and
 `COMPOSE_PROFILES` is empty. Recommended live: `redis,worker,scheduler`.
 
-Passwords / `DATABASE_URL` are never logged. `shopware rollback` remains a stub
-(exit 2); auto-rollback on smoke uses the shared compose/rollout helper.
+Passwords / `DATABASE_URL` are never logged. Auto-rollback on smoke uses the
+shared compose/rollout helper (`fyrst-cli shopware rollback`).
 
 
 ## Exact import CLI
@@ -127,6 +127,40 @@ shell expansion**), same parser as import (`src/shopware/envfile.rs`).
 Refuses a bash xtrace equivalent (`SHELLOPTS=xtrace` / `BASH_XTRACEFD`) so
 credentials in `.env` cannot leak via trace. Summary never prints secret
 values (MYSQL passwords, `APP_SECRET`).
+
+## Exact rollback CLI
+
+```text
+fyrst-cli shopware rollback [--dry-run] [--skip-pull]
+```
+
+## `shopware rollback` (implemented)
+
+Resolves shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`),
+loads `.env` then `.env.prod`. Process-env wins for `IMAGE`, `SMOKE_URL`,
+`COMPOSE_PROFILES`, `SKIP_PULL`, `PULL_POLICY` when non-empty. **`IMAGE_TAG`
+from the process environment is ignored** — the only tag is shop-root
+`.previous-tag` (overlay `vps_read_previous_tag`). Missing or empty
+`.previous-tag` exits 1 and does not guess `IMAGE_TAG`.
+
+Requires `IMAGE`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, and the same
+compose files as release:
+
+`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`
+
+Rollout order reuses the release compose/rollout helper (never `--build`;
+`run` uses `--pull never`, `up` uses `--no-build`):
+
+1. Pull unless `--skip-pull` / `SKIP_PULL=1` / `PULL_POLICY=never`.
+2. Start bundled `mysql` if present; start `redis` if present / profiled.
+3. One-shot `compose --profile setup run --rm --pull never setup`.
+4. `up -d --no-build` (optional `--pull never`) `--remove-orphans web`.
+5. Extra `COMPOSE_PROFILES` (must not include `setup`).
+6. Optional `SMOKE_URL`. Write `.deployed-tag` **only after** success (and
+   smoke, if set). Smoke failure does not update `.deployed-tag`.
+
+`--dry-run` prints that sequence and does not pull or recreate containers.
+`--skip-pull` sets `PULL_POLICY=never` (same-host / air-gap).
 
 ## `shopware db import` (implemented)
 
@@ -173,7 +207,8 @@ shop-root `.env`. Names match the overlay:
 | Init-env | `APP_SECRET` (optional `--generate-app-secret`; never logged), `IMAGE` |
 | Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SYNC_MYSQL_CLIENT_IMAGE`, `SYNC_SNAPSHOT_DIR`, `SYNC_ALLOW_LIVE_RESTORE` |
 | Dump (shopware-cli / overlay only) | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `SYNC_SHOPWARE_CLI_IMAGE`, `SYNC_DUMP_ENGINE`, `SYNC_DUMP_QUICK`, `SYNC_DUMP_CLEAN`, `SYNC_DUMP_ANONYMIZE` |
-| Release | `IMAGE`, `IMAGE_TAG`, `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |
+| Release | `IMAGE`, `IMAGE_TAG` (release / `.env`; **ignored on rollback**), `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |
+| Rollback | `.previous-tag` is the only `IMAGE_TAG`; same optional env as release except `ROLLBACK_ON_SMOKE_FAIL` |
 | Sync (future) | other `SYNC_*` (SSH, rewrite URL / map) |
 | Backup (future) | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS`, `BACKUP_SSH_KEY`, `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
 
@@ -183,5 +218,5 @@ When implemented, remaining verbs should exec (or source-equivalent) the
 overlay script with the parsed argv, rather than re-coding rewrite / rsync in
 Rust. Recipe and `shopware-cd` product code stay out of this repo. Recipe bash
 wrappers are **not** switched to `fyrst-cli` in this change. Dump remains
-shopware-cli even after wrappers land. Rollback (#5) should reuse the release
+shopware-cli even after wrappers land. Rollback reuses the release
 compose/rollout helper.

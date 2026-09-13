@@ -4,8 +4,9 @@
 //! wraps it. Database **import** is `fyrst-cli shopware db import` (also used
 //! by `shopware sync restore --data db`). `init-env` finishes shop-root `.env`
 //! (recipes `deploy/init-env.sh`). VPS **release** is
-//! `fyrst-cli shopware release`. Other verbs stay stubs. See
-//! docs/ADR-0001-shopware-namespace.md.
+//! `fyrst-cli shopware release`. **Rollback** is
+//! `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`). Other verbs
+//! stay stubs. See docs/ADR-0001-shopware-namespace.md.
 
 mod compose;
 mod data;
@@ -18,6 +19,7 @@ mod live;
 mod mysql;
 mod release;
 mod restore;
+mod rollback;
 mod rollout;
 mod snapshot;
 
@@ -61,7 +63,13 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
                 e.exit_code()
             }
         },
-        ShopwareCommand::Rollback(_) => not_implemented("shopware rollback"),
+        ShopwareCommand::Rollback(op) => match rollback::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
         ShopwareCommand::Sync(SyncCommand::Sync(_)) => not_implemented("shopware sync sync"),
         ShopwareCommand::SyncLocal(_) => not_implemented("shopware sync-local"),
         ShopwareCommand::Backup(BackupCommand::Backup(_)) => {

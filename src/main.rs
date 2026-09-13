@@ -4,6 +4,7 @@
 //! not wrap dump. `shopware init-env` finishes shop-root `.env`. Database
 //! import is `fyrst-cli shopware db import` (MySQL client via Compose exec or
 //! a one-shot client image). VPS release is `fyrst-cli shopware release`.
+//! Rollback is `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`).
 //! Other shopware verbs still exit 2 except `sync restore` for the DB path.
 
 mod cli;

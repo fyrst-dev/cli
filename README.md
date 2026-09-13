@@ -17,13 +17,18 @@ import module (`--snapshot-dir/db.sql.gz` or `db.sql`).
 `fyrst-cli shopware release` — pull `IMAGE:IMAGE_TAG` and recreate the VPS
 Compose stack (never builds images).
 
+**Implemented:** `fyrst-cli shopware rollback` — re-deploy `IMAGE` using
+`IMAGE_TAG` from `.previous-tag` (process-env `IMAGE_TAG` is ignored). Same
+compose files and order as `deploy/vps-release.sh`. Writes `.deployed-tag`
+only after success.
+
 **Dump is not in fyrst-cli.** Database dumps are owned completely by
 `shopware-cli project dump`. This CLI does not provide a dump command and
 does not wrap or shell out to shopware-cli for dump.
 
-**Still stub (exit 2):** `shopware rollback`, `shopware sync snapshot` (points
-operators at shopware-cli for DB; bind-mount volumes remain stub), bind-mount
-volume restore, remote SSH `--from`, and remaining `shopware` verbs (`sync sync`,
+**Still stub (exit 2):** `shopware sync snapshot` (points operators at
+shopware-cli for DB; bind-mount volumes remain stub), bind-mount volume
+restore, remote SSH `--from`, and remaining `shopware` verbs (`sync sync`,
 `sync-local`, `backup`).
 
 This CLI does not reimplement dump or
@@ -87,7 +92,8 @@ Requires a Rust toolchain (edition 2021).
 
 Docker is still required at runtime for `shopware db import` (Compose `mysql`
 exec, or a one-shot mysql/mariadb client container) and for `shopware release`
-(Compose pull + recreate). Installing this binary does not replace Docker.
+/ `shopware rollback` (Compose pull + recreate). Installing this binary does
+not replace Docker.
 Dump stays with `shopware-cli project dump`; fyrst-cli does not dump.
 
 ## Command tree
@@ -95,7 +101,7 @@ Dump stays with `shopware-cli project dump`; fyrst-cli does not dump.
 ```
 fyrst-cli shopware init-env            # shop-root .env finisher (this is real)
 fyrst-cli shopware release            # VPS compose pull + recreate
-fyrst-cli shopware rollback
+fyrst-cli shopware rollback           # VPS rollback to .previous-tag
 fyrst-cli shopware db import          # SQL import (this is real)
 fyrst-cli shopware sync snapshot       # not a dump; use shopware-cli
 fyrst-cli shopware sync restore        # DB path = same import module
@@ -121,6 +127,7 @@ fyrst-cli shopware --help
 fyrst-cli shopware init-env --help
 fyrst-cli shopware db import --help
 fyrst-cli shopware release --help
+fyrst-cli shopware rollback --help
 ```
 
 ## Dump (shopware-cli only)
@@ -233,10 +240,33 @@ passes. On smoke failure the command prints
 `IMAGE_TAG=$(cat .previous-tag) fyrst-cli shopware rollback`. Auto-rollback
 runs for live by default (`ROLLBACK_ON_SMOKE_FAIL` unset → on when
 `SHOPWARE_DEPLOY_ENV=live`); the command still exits 1 so CI does not treat the
-new tag as live. `shopware rollback` itself is still a stub.
+new tag as live. `shopware rollback` is implemented and reads `IMAGE_TAG`
+from `.previous-tag` (process-env `IMAGE_TAG` is ignored).
 
 Live with empty `COMPOSE_PROFILES` prints a warning (does not auto-enable
 `redis,worker,scheduler`). `setup` in `COMPOSE_PROFILES` is refused.
+
+## Rollback
+
+Run from the shop checkout (directory with `.env`), or set `COMPOSE_DIR`.
+Requires a prior release that wrote `.previous-tag`.
+
+```bash
+# Print the compose sequence (does not pull or recreate)
+fyrst-cli shopware rollback --dry-run
+
+# Same-host / air-gap
+fyrst-cli shopware rollback --skip-pull
+
+fyrst-cli shopware rollback
+```
+
+`IMAGE` comes from env / `.env`. `IMAGE_TAG` is **only** `.previous-tag`
+(process-env `IMAGE_TAG` is ignored). Missing or empty `.previous-tag` exits
+non-zero. Optional env matches release: `COMPOSE_PROFILES`, `SMOKE_URL`,
+`PULL_POLICY`, `SKIP_PULL`. `.deployed-tag` is written only after a successful
+rollout (and smoke, if `SMOKE_URL` is set). Never builds images or compiles
+themes/assets.
 
 ## Build
 
@@ -248,6 +278,7 @@ cargo run -- shopware --help
 cargo run -- shopware init-env --help
 cargo run -- shopware db import --help
 cargo run -- shopware release --help
+cargo run -- shopware rollback --help
 cargo test
 ```
 

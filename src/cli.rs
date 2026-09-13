@@ -25,6 +25,7 @@ Dump = shopware-cli project dump only (fyrst-cli does not dump).
 Import = fyrst-cli shopware db import (also used by sync restore --data db).
 init-env = fyrst-cli shopware init-env (shop-root .env after create + Flex).
 Release = fyrst-cli shopware release (VPS compose; never builds).
+Rollback = fyrst-cli shopware rollback (IMAGE_TAG from .previous-tag).
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
@@ -39,6 +40,7 @@ Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap
 `shopware init-env` finishes shop-root .env after create + Flex. \
 `shopware db import` loads a .sql / .sql.gz via the MySQL/MariaDB client. \
 `shopware release` pulls IMAGE:IMAGE_TAG and recreates the VPS Compose stack (never builds). \
+`shopware rollback` re-deploys IMAGE using IMAGE_TAG from `.previous-tag`. \
 `shopware sync snapshot` is not a dump command. Other shopware subcommands still exit 2 \
 with \"not implemented\".",
     arg_required_else_help = true,
@@ -72,8 +74,9 @@ one-shot client image for DATABASE_URL). `sync restore --data db` uses the same 
 `release` is implemented: VPS `docker compose` pull + recreate \
 (`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`). Never builds images. \
 Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
-`rollback` still exits 2. Remaining verbs may call:\n  \
-- docker compose (rollback)\n  \
+`rollback` is implemented: same compose files and order as `vps-release.sh`, with \
+IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).\n\n\
+Remaining verbs may call:\n  \
 - bin/console fyrst:sales-channel:rewrite-urls (opt-in after restore)",
     after_help = SHOPWARE_COMMAND_TREE
 )]
@@ -408,6 +411,27 @@ mod tests {
                 assert!(op.vps);
                 assert!(op.generate_app_secret);
                 assert!(op.dry_run);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rollback_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "rollback",
+            "--dry-run",
+            "--skip-pull",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Rollback(op),
+            }) => {
+                assert!(op.dry_run);
+                assert!(op.skip_pull);
             }
             other => panic!("unexpected parse: {other:?}"),
         }
