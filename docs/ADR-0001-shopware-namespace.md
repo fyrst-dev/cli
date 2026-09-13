@@ -78,7 +78,9 @@ the MySQL client for import, because no upstream CLI command exists.
    `SYNC_ALLOW_LIVE_RESTORE=1` so staging imports stay unscary while live is
    never a silent default.
 6. **Thin wrappers (future):** remaining verbs may invoke matching recipe
-   scripts. The Rust layer owns clap, exit codes, and `COMPOSE_DIR`
+   scripts. **Rollback** is implemented in this CLI (same compose files and
+   `vps_rollout` order as `deploy/vps-rollback.sh`; `IMAGE_TAG` only from
+   `.previous-tag`). The Rust layer owns clap, exit codes, and `COMPOSE_DIR`
    discovery. It still does not wrap dump.
 
 ## Consequences

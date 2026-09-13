@@ -1,7 +1,6 @@
 //! Shared VPS rollout helpers (recipes `deploy/lib/vps-common.sh`).
 //!
-//! Used by `shopware release`. `shopware rollback` (#5) should reuse this
-//! module; this crate does not wire that CLI here.
+//! Used by `shopware release` and `shopware rollback`.
 
 use super::compose::{
     args_contain_build, compose_service_names, docker_log, extend_profiles,
