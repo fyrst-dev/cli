@@ -722,7 +722,11 @@ fn restore_tree(src: &Path, dest: &Path, archive_image: &str) -> Result<(), Erro
             return chown_data_dir(dest, archive_image);
         }
     }
-    docker_copy_tree(src, dest, archive_image)
+    if have_cmd("docker") {
+        return docker_copy_tree(src, dest, archive_image);
+    }
+    copy_tree_replace(src, dest)?;
+    chown_data_dir(dest, archive_image)
 }
 
 fn restore_tar(tar: &Path, dest: &Path, archive_image: &str) -> Result<(), Error> {
@@ -782,7 +786,14 @@ fn chown_data_dir(dest: &Path, archive_image: &str) -> Result<(), Error> {
     if matches!(local, Ok(s) if s.success()) {
         return Ok(());
     }
-    docker_chown(dest, archive_image)
+    if have_cmd("docker") {
+        return docker_chown(dest, archive_image);
+    }
+    eprintln!(
+        "WARNING: chown 82:82 {} failed (need root); bind-mount owner not set",
+        dest.display()
+    );
+    Ok(())
 }
 
 fn docker_chown(dest: &Path, archive_image: &str) -> Result<(), Error> {

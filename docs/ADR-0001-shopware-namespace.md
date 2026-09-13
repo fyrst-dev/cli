@@ -77,7 +77,14 @@ the MySQL client for import, because no upstream CLI command exists.
    `db import` uses the same live detection but requires `--allow-live` or
    `SYNC_ALLOW_LIVE_RESTORE=1` so staging imports stay unscary while live is
    never a silent default.
-6. **Thin wrappers (future):** remaining verbs may invoke matching recipe
+6. **Backup restore:** `shopware backup restore` is disaster recovery onto
+   **this host**, not live→staging sync. `--from` and
+   `--i-understand-this-restores-this-host` (or `BACKUP_CONFIRM_RESTORE=1`)
+   are required. `SHOPWARE_DEPLOY_ENV=live` needs `BACKUP_ALLOW_LIVE_RESTORE=1`.
+   Inner apply sets `SYNC_ALLOW_LIVE_RESTORE=1` and reuses the sync restore
+   module (db import + bind-mount apply from artifact layout). fyrst-cli
+   does not dump.
+7. **Thin wrappers (future):** remaining verbs may invoke matching recipe
    scripts. **Rollback** is implemented in this CLI (same compose files and
    `vps_rollout` order as `deploy/vps-rollback.sh`; `IMAGE_TAG` only from
    `.previous-tag`). The Rust layer owns clap, exit codes, and `COMPOSE_DIR`
