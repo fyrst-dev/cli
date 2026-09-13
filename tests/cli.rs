@@ -133,7 +133,6 @@ fn backup_help_lists_backup_prune_restore() {
 #[test]
 fn stubs_exit_2_with_not_implemented() {
     let cases: &[&[&str]] = &[
-        &["shopware", "release"],
         &["shopware", "rollback"],
         &["shopware", "sync", "sync"],
         &["shopware", "sync-local"],

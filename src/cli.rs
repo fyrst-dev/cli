@@ -24,6 +24,7 @@ Command tree:
 Dump = shopware-cli project dump only (fyrst-cli does not dump).
 Import = fyrst-cli shopware db import (also used by sync restore --data db).
 init-env = fyrst-cli shopware init-env (shop-root .env after create + Flex).
+Release = fyrst-cli shopware release (VPS compose; never builds).
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
@@ -37,6 +38,7 @@ Shopware CD ops live under `shopware`. Other fyrst namespaces can be added later
 Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap dump. \
 `shopware init-env` finishes shop-root .env after create + Flex. \
 `shopware db import` loads a .sql / .sql.gz via the MySQL/MariaDB client. \
+`shopware release` pulls IMAGE:IMAGE_TAG and recreates the VPS Compose stack (never builds). \
 `shopware sync snapshot` is not a dump command. Other shopware subcommands still exit 2 \
 with \"not implemented\".",
     arg_required_else_help = true,
@@ -67,11 +69,12 @@ comments COMPOSE_PROJECT_NAME). `--dry-run` prints the plan and does not write. 
 Passwords and APP_SECRET are never printed.\n\n\
 `db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
 one-shot client image for DATABASE_URL). `sync restore --data db` uses the same module. \
+`release` is implemented: VPS `docker compose` pull + recreate \
+(`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`). Never builds images. \
 Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
-Other verbs will keep calling:\n  \
-- docker compose (release / rollback)\n  \
-- bin/console fyrst:sales-channel:rewrite-urls (opt-in after restore)\n\n\
-Those tools are not reimplemented here.",
+`rollback` still exits 2. Remaining verbs may call:\n  \
+- docker compose (rollback)\n  \
+- bin/console fyrst:sales-channel:rewrite-urls (opt-in after restore)",
     after_help = SHOPWARE_COMMAND_TREE
 )]
 pub struct ShopwareArgs {
@@ -430,6 +433,27 @@ mod tests {
                 assert_eq!(op.file, "/tmp/db.sql.gz");
                 assert!(op.dry_run);
                 assert!(op.allow_live);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn release_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "release",
+            "--dry-run",
+            "--skip-pull",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Release(op),
+            }) => {
+                assert!(op.dry_run);
+                assert!(op.skip_pull);
             }
             other => panic!("unexpected parse: {other:?}"),
         }

@@ -14,17 +14,19 @@ License: MIT.
 dump into this shop's database. shopware-cli has no import; that is the gap
 this CLI fills. `fyrst-cli shopware sync restore --data db` uses the same
 import module (`--snapshot-dir/db.sql.gz` or `db.sql`).
+`fyrst-cli shopware release` — pull `IMAGE:IMAGE_TAG` and recreate the VPS
+Compose stack (never builds images).
 
 **Dump is not in fyrst-cli.** Database dumps are owned completely by
 `shopware-cli project dump`. This CLI does not provide a dump command and
 does not wrap or shell out to shopware-cli for dump.
 
-**Still stub (exit 2):** `shopware sync snapshot` (points operators at
-shopware-cli for DB; bind-mount volumes remain stub), bind-mount volume
-restore, remote SSH `--from`, and remaining `shopware` verbs (`release`,
-`rollback`, `sync sync`, `sync-local`, `backup`).
+**Still stub (exit 2):** `shopware rollback`, `shopware sync snapshot` (points
+operators at shopware-cli for DB; bind-mount volumes remain stub), bind-mount
+volume restore, remote SSH `--from`, and remaining `shopware` verbs (`sync sync`,
+`sync-local`, `backup`).
 
-This CLI does not reimplement dump, Compose release, or
+This CLI does not reimplement dump or
 `fyrst:sales-channel:rewrite-urls`. Overlay scripts live in
 [fyrst-dev/recipes](https://github.com/fyrst-dev/recipes) (`fyrst/shopware-cd`).
 The console command lives in [fyrst-dev/shopware-cd](https://github.com/fyrst-dev/shopware-cd).
@@ -84,15 +86,15 @@ Requires a Rust toolchain (edition 2021).
 ### Runtime
 
 Docker is still required at runtime for `shopware db import` (Compose `mysql`
-exec, or a one-shot mysql/mariadb client container). Installing this binary
-does not replace Docker. Dump stays with `shopware-cli project dump`; fyrst-cli
-does not dump.
+exec, or a one-shot mysql/mariadb client container) and for `shopware release`
+(Compose pull + recreate). Installing this binary does not replace Docker.
+Dump stays with `shopware-cli project dump`; fyrst-cli does not dump.
 
 ## Command tree
 
 ```
 fyrst-cli shopware init-env            # shop-root .env finisher (this is real)
-fyrst-cli shopware release
+fyrst-cli shopware release            # VPS compose pull + recreate
 fyrst-cli shopware rollback
 fyrst-cli shopware db import          # SQL import (this is real)
 fyrst-cli shopware sync snapshot       # not a dump; use shopware-cli
@@ -118,6 +120,7 @@ fyrst-cli shopware backup restore
 fyrst-cli shopware --help
 fyrst-cli shopware init-env --help
 fyrst-cli shopware db import --help
+fyrst-cli shopware release --help
 ```
 
 ## Dump (shopware-cli only)
@@ -202,6 +205,39 @@ Passwords (`MYSQL_PASSWORD`, `DATABASE_URL`) are never printed.
 
 `.env` is parsed as `KEY=VALUE` (quotes stripped, **no shell expansion**).
 
+## Release
+
+Run from the shop checkout (directory with `.env`), or set `COMPOSE_DIR`.
+Requires `IMAGE`, `IMAGE_TAG`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, and
+`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`.
+
+```bash
+# Print the compose sequence (no pull / recreate)
+fyrst-cli shopware release --dry-run
+
+# Same-host / air-gap: skip registry pull (PULL_POLICY=never)
+fyrst-cli shopware release --skip-pull --dry-run
+
+fyrst-cli shopware release
+```
+
+Process-env `IMAGE` / `IMAGE_TAG` win over `.env` (CI tags beat
+`IMAGE_TAG=latest`). `--skip-pull` or `SKIP_PULL=1` / `PULL_POLICY=never`
+skips `docker compose pull` and passes `--pull never` to `up`.
+
+Never builds images. Setup is `compose --profile setup run --rm --pull never setup`
+(Compose v5 dropped `--no-build` on `run`). `up` uses `--no-build`.
+
+`.deployed-tag` is written only after setup/web succeed and optional `SMOKE_URL`
+passes. On smoke failure the command prints
+`IMAGE_TAG=$(cat .previous-tag) fyrst-cli shopware rollback`. Auto-rollback
+runs for live by default (`ROLLBACK_ON_SMOKE_FAIL` unset → on when
+`SHOPWARE_DEPLOY_ENV=live`); the command still exits 1 so CI does not treat the
+new tag as live. `shopware rollback` itself is still a stub.
+
+Live with empty `COMPOSE_PROFILES` prints a warning (does not auto-enable
+`redis,worker,scheduler`). `setup` in `COMPOSE_PROFILES` is refused.
+
 ## Build
 
 For local development (also see [Install](#install) for release binaries):
@@ -211,6 +247,7 @@ cargo build
 cargo run -- shopware --help
 cargo run -- shopware init-env --help
 cargo run -- shopware db import --help
+cargo run -- shopware release --help
 cargo test
 ```
 

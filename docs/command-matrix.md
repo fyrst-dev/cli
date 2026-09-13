@@ -10,7 +10,8 @@ Delegated tools:
 | --- | --- |
 | **DB dump** | **`shopware-cli project dump` only.** fyrst-cli does not dump, wrap dump, or shell out to shopware-cli. |
 | **DB import** | **`fyrst-cli shopware db import`** (MySQL/MariaDB client). shopware-cli has no import. |
-| VPS release / rollback | `docker compose` (`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`) |
+| VPS release | **`fyrst-cli shopware release`** (`docker compose` with `deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`) |
+| VPS rollback | `docker compose` (same files; `fyrst-cli shopware rollback` is still a stub) |
 | Opt-in URL rewrite after restore | `bin/console fyrst:sales-channel:rewrite-urls` via compose `web` |
 
 ## Map
@@ -18,7 +19,7 @@ Delegated tools:
 | Overlay script | CLI | Nested verbs | Flags | Status |
 | --- | --- | --- | --- | --- |
 | `deploy/init-env.sh` | `fyrst-cli shopware init-env` | — | `--shop-id`, `--env`, `--image`, `--vps`, `--generate-app-secret`, `--dry-run` | **implemented** |
-| `deploy/vps-release.sh` | `fyrst-cli shopware release` | — | `--dry-run`, `--skip-pull` | stub (exit 2) |
+| `deploy/vps-release.sh` | `fyrst-cli shopware release` | — | `--dry-run`, `--skip-pull` | **implemented** |
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware rollback` | — | `--dry-run`, `--skip-pull` | stub (exit 2) |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
 | `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync snapshot` | — | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **not a dump command** (exit 2): use `shopware-cli project dump`; bind-mount volumes stub |
@@ -35,6 +36,54 @@ Delegated tools:
 ```text
 fyrst-cli shopware init-env [--shop-id SLUG] [--env live|staging|playground|dev] [--image REPO] [--vps] [--generate-app-secret] [--dry-run]
 ```
+
+## Exact release CLI
+
+```text
+fyrst-cli shopware release [--dry-run] [--skip-pull]
+```
+
+## `shopware release` (implemented)
+
+Resolves shop root (`COMPOSE_DIR` or walk from cwd), loads `.env` then `.env.prod`
+(not `deploy/sync.env`). Process-env `IMAGE` / `IMAGE_TAG` (and other VPS knobs)
+win when non-empty — CI tags beat `.env` `IMAGE_TAG=latest`. Requires `IMAGE`,
+`IMAGE_TAG`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, and all three compose files.
+
+Compose is always:
+
+```text
+docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml
+```
+
+Never `--build`. `compose run` uses `--pull never` (not `--no-build`). `compose up`
+uses `--no-build` (and `--pull never` when skipping registry pull). Theme/asset
+compile flags stay in the setup helper image.
+
+1. If `.deployed-tag` exists, copy it to `.previous-tag`.
+2. `compose pull` unless `--skip-pull` / `SKIP_PULL=1` / `PULL_POLICY=never`.
+3. Start bundled `mysql` if present; start `redis` if present / profiled.
+4. One-shot `--profile setup run --rm --pull never setup`.
+5. `up -d --no-build` (optional `--pull never`) `--remove-orphans web`.
+6. Extra `COMPOSE_PROFILES` (must not include `setup`).
+7. Optional `SMOKE_URL` (curl, 30 attempts). Write `.deployed-tag` only after
+   setup/web succeed and smoke passes.
+8. On smoke failure: print
+   `IMAGE_TAG=$(cat .previous-tag) fyrst-cli shopware rollback`. Auto-run the
+   shared rollout helper at the previous tag when `ROLLBACK_ON_SMOKE_FAIL` is
+   on (unset → **on for live**, off otherwise). Release still **exits 1** after
+   a successful auto-rollback. First deploy with no `.previous-tag` cannot
+   auto-rollback.
+
+`--dry-run` prints that sequence and does not pull, recreate, or write tag files.
+`--skip-pull` sets `PULL_POLICY=never`.
+
+Loud warning (does not auto-enable) when `SHOPWARE_DEPLOY_ENV=live` and
+`COMPOSE_PROFILES` is empty. Recommended live: `redis,worker,scheduler`.
+
+Passwords / `DATABASE_URL` are never logged. `shopware rollback` remains a stub
+(exit 2); auto-rollback on smoke uses the shared compose/rollout helper.
+
 
 ## Exact import CLI
 
@@ -131,7 +180,8 @@ shop-root `.env`. Names match the overlay:
 ## Future wrappers (not done here)
 
 When implemented, remaining verbs should exec (or source-equivalent) the
-overlay script with the parsed argv, rather than re-coding compose /
-rewrite / rsync in Rust. Recipe and `shopware-cd` product code stay out of this
-repo. Recipe bash wrappers are **not** switched to `fyrst-cli` in this change.
-Dump remains shopware-cli even after wrappers land.
+overlay script with the parsed argv, rather than re-coding rewrite / rsync in
+Rust. Recipe and `shopware-cd` product code stay out of this repo. Recipe bash
+wrappers are **not** switched to `fyrst-cli` in this change. Dump remains
+shopware-cli even after wrappers land. Rollback (#5) should reuse the release
+compose/rollout helper.
