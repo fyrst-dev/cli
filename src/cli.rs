@@ -27,6 +27,7 @@ init-env = fyrst-cli shopware init-env (shop-root .env after create + Flex).
 Release = fyrst-cli shopware release (VPS compose; never builds).
 Rollback = fyrst-cli shopware rollback (IMAGE_TAG from .previous-tag).
 Snapshot volumes = fyrst-cli shopware sync snapshot (bind-mount trees; not a dump).
+sync restore also restores bind-mount volumes and opt-in rewrite via compose web.
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
 ";
 
@@ -43,6 +44,8 @@ Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap
 `shopware release` pulls IMAGE:IMAGE_TAG and recreates the VPS Compose stack (never builds). \
 `shopware rollback` re-deploys IMAGE using IMAGE_TAG from `.previous-tag`. \
 `shopware sync snapshot` copies bind-mount / volume trees; it is not a dump command. \
+`shopware sync restore` loads --snapshot-dir (same import module, bind-mount volumes, \
+opt-in rewrite via compose web). \
 Other shopware subcommands still exit 2 with \"not implemented\".",
     arg_required_else_help = true,
     subcommand_required = true,
@@ -71,15 +74,15 @@ keys from `.env.example`, shop id / deploy env, optional IMAGE / APP_SECRET, `--
 comments COMPOSE_PROJECT_NAME). `--dry-run` prints the plan and does not write. \
 Passwords and APP_SECRET are never printed.\n\n\
 `db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
-one-shot client image for DATABASE_URL). `sync restore --data db` uses the same module. \
+one-shot client image for DATABASE_URL). `sync restore` uses that same import module, \
+restores bind-mount volumes from --snapshot-dir, stops/starts web/worker/scheduler, and \
+runs opt-in `bin/console fyrst:sales-channel:rewrite-urls` via compose `web`. \
 `release` is implemented: VPS `docker compose` pull + recreate \
 (`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`). Never builds images. \
 `sync snapshot` copies bind-mount trees into --snapshot-dir/data/<item>/; it does not dump. \
 Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
 `rollback` is implemented: same compose files and order as `vps-release.sh`, with \
-IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).\n\n\
-Remaining verbs may call:\n  \
-- bin/console fyrst:sales-channel:rewrite-urls (opt-in after restore)",
+IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).",
     after_help = SHOPWARE_COMMAND_TREE
 )]
 pub struct ShopwareArgs {
@@ -214,7 +217,7 @@ pub struct DbImportArgs {
 pub enum SyncCommand {
     /// Bind-mount trees into --snapshot-dir; dump stays shopware-cli
     Snapshot(SyncOpArgs),
-    /// Load --snapshot-dir into this host's DB (same import as `db import`)
+    /// Load --snapshot-dir onto this host (DB import + bind-mount volumes)
     Restore(SyncOpArgs),
     /// Pull from --from then apply locally (cron path: rsync trees + DB)
     Sync(SyncOpArgs),

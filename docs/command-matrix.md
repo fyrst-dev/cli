@@ -23,7 +23,7 @@ Delegated tools:
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware rollback` | — | `--dry-run`, `--skip-pull` | **implemented** |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
 | `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync snapshot` | — | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **volumes implemented** (bind-mount trees → `--snapshot-dir/data/<item>/`; named-volume tar fallback). **Not a dump command:** `--data db` exits 2 and tells operators to run `shopware-cli project dump` |
-| `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync restore` | — | same flags | **DB path implemented** (same import module; `--snapshot-dir/db.sql.gz`); volumes stub; live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1` |
+| `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync restore` | — | same flags | **implemented**: DB via same import module; bind-mount volumes from `data/<item>/` or `volumes/<item>.tar.gz`; stop/start `web`/`worker`/`scheduler`; opt-in rewrite via compose `web`; live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1`; rewrite never on live |
 | `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync sync` | — | same flags | stub (exit 2) |
 | `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | stub (exit 2) |
 | `deploy/backup-runtime.sh` | `fyrst-cli shopware backup` | `backup`, `prune`, `restore` | `--data`, `--dry-run`; restore also `--from`, `--i-understand-this-restores-this-host` | stub (exit 2) |
@@ -98,7 +98,10 @@ fyrst-cli shopware sync restore --data db [--snapshot-dir DIR] [--dry-run]
 ```
 
 looks for `<snapshot-dir>/db.sql.gz` then `db.sql` and calls the same import
-module. Default `--snapshot-dir` is `<shop>/var/runtime-sync`.
+module. Default `--snapshot-dir` is `<shop>/var/runtime-sync`. Bind-mount
+volumes (`media`, `files`, `thumbnail`, `theme`, `sitemap`) restore from
+`<snapshot-dir>/data/<item>/` (preferred) or
+`<snapshot-dir>/volumes/<item>.tar.gz`.
 
 ## `shopware init-env` (implemented)
 
@@ -186,8 +189,34 @@ hostname equal to `live`, case-insensitive):
 | --- | --- | --- |
 | `db import` | refuse | `--allow-live` or `SYNC_ALLOW_LIVE_RESTORE=1` |
 | `sync restore` | refuse (overlay rules) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
+| opt-in rewrite after restore | refuse on live | **none** — `SYNC_ALLOW_LIVE_RESTORE=1` does not bypass |
 
 Staging / playground / dev need no extra flag.
+
+## `shopware sync restore` (volumes + orchestration)
+
+Applies `--snapshot-dir` onto **this host**. `--from` is unused for local
+restore (kept for clap compatibility with `sync snapshot` / `sync sync`).
+
+1. Refuse a live consumer unless `SYNC_ALLOW_LIVE_RESTORE=1` (covers
+   volume-only restore, not only db).
+2. If `SYNC_REWRITE_APP_URL` or `SYNC_REWRITE_URL_MAP` is set, refuse when
+   the consumer is live. Rewrite on live is impossible.
+3. Stop running compose services `web`, `worker`, `scheduler`.
+4. If `--data` includes db: existing import module (`db.sql.gz` then `db.sql`).
+5. If rewrite was requested **and** db was restored: `docker compose … run
+   --rm --pull never --entrypoint php web bin/console
+   fyrst:sales-channel:rewrite-urls …`. If db was skipped, rewrite is skipped.
+6. Restore selected bind-mount items into `SHOPWARE_DATA_ROOT` /
+   `SYNC_DATA_ROOT` / derived `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV`
+   (`SHOPWARE_DATA_BASE` defaults to `/var/lib/shopware/data`). Prefer rsync
+   from `data/<item>/`, else extract `volumes/<item>.tar.gz`, then `chown 82:82`.
+   `--dry-run` prints rsync/extract/chown and does not copy.
+7. Start previously stopped app services.
+8. Non-fatal `cache:clear` when `IMAGE` is set; optional non-fatal
+   `SYNC_POST_RESTORE_CMD`; hints when rewrite was off.
+
+Passwords are never logged. Rewrite is not a Rust SQL rewriter.
 
 ## `shopware sync snapshot` (volumes implemented; not a dump)
 
@@ -237,18 +266,22 @@ shop-root `.env`. Names match the overlay:
 | Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`, `COMPOSE_PROJECT_NAME`, `SYNC_ENV` |
 | Init-env | `APP_SECRET` (optional `--generate-app-secret`; never logged), `IMAGE` |
 | Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SYNC_MYSQL_CLIENT_IMAGE`, `SYNC_SNAPSHOT_DIR`, `SYNC_ALLOW_LIVE_RESTORE` |
+| Restore volumes | `SHOPWARE_DATA_ROOT`, `SYNC_DATA_ROOT`, `SHOPWARE_DATA_BASE`, `SYNC_ARCHIVE_IMAGE` |
+| Opt-in rewrite / post-restore | `SYNC_REWRITE_APP_URL`, `SYNC_REWRITE_URL_MAP`, `SYNC_POST_RESTORE_CMD`, `IMAGE`, `APP_URL`, `SYNC_APP_URL` |
 | Dump (shopware-cli / overlay only) | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `SYNC_SHOPWARE_CLI_IMAGE`, `SYNC_DUMP_ENGINE`, `SYNC_DUMP_QUICK`, `SYNC_DUMP_CLEAN`, `SYNC_DUMP_ANONYMIZE` |
 | Release | `IMAGE`, `IMAGE_TAG` (release / `.env`; **ignored on rollback**), `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |
 | Rollback | `.previous-tag` is the only `IMAGE_TAG`; same optional env as release except `ROLLBACK_ON_SMOKE_FAIL` |
 | Snapshot volumes | `SYNC_DATA_ROOT`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_REMOTE_PATH`, `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_*` |
-| Sync (future) | other `SYNC_*` (rewrite URL / map) |
+| Sync (future) | other `SYNC_*` (cron pull) |
 | Backup (future) | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS`, `BACKUP_SSH_KEY`, `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
 
 ## Future wrappers (not done here)
 
 When implemented, remaining verbs should exec (or source-equivalent) the
 overlay script with the parsed argv, rather than re-coding rewrite / rsync in
-Rust. Recipe and `shopware-cd` product code stay out of this repo. Recipe bash
+Rust. `sync restore` volumes/orchestration already match the overlay in this
+CLI (rsync + compose `web` console rewrite); do not reimplement rewrite in SQL.
+Recipe and `shopware-cd` product code stay out of this repo. Recipe bash
 wrappers are **not** switched to `fyrst-cli` in this change. Dump remains
 shopware-cli even after wrappers land. Rollback reuses the release
 compose/rollout helper.

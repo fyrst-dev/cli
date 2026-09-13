@@ -283,6 +283,11 @@ pub fn derive_local_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
     Ok(derived_data_root(env, &shop_id, deploy_env))
 }
 
+/// Alias used by `sync restore` (same resolution as snapshot).
+pub fn resolve_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
+    derive_local_data_root(env)
+}
+
 /// Remote env directory (`SYNC_SOURCE_ENV`, else `--from` alias, else `live`).
 pub fn source_env_for_remote(from: &str, env: &ShopEnv) -> String {
     if let Some(s) = env.get("SYNC_SOURCE_ENV") {
@@ -540,6 +545,7 @@ COMPOSE_PROFILES=redis
             derive_local_data_root(&env).unwrap(),
             PathBuf::from("/override")
         );
+        assert_eq!(resolve_data_root(&env).unwrap(), PathBuf::from("/override"));
 
         let mut vars = HashMap::new();
         vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
@@ -570,6 +576,19 @@ COMPOSE_PROFILES=redis
         vars.insert("SYNC_SOURCE_ENV".into(), "playground".into());
         let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
         assert_eq!(source_env_for_remote("live", &env), "playground");
+    }
+
+    #[test]
+    fn data_root_custom_base() {
+        let mut vars = HashMap::new();
+        vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
+        vars.insert("SHOPWARE_DEPLOY_ENV".into(), "dev".into());
+        vars.insert("SHOPWARE_DATA_BASE".into(), "/opt/data".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
+        assert_eq!(
+            resolve_data_root(&env).unwrap(),
+            PathBuf::from("/opt/data/acme/dev")
+        );
     }
 
     #[test]
