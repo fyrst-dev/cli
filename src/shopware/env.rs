@@ -280,11 +280,16 @@ pub fn derived_data_root(env: &ShopEnv, shop_id: &str, deploy_env: &str) -> Path
 
 /// Bind-mount root on this host (`SYNC_DATA_ROOT` / `SHOPWARE_DATA_ROOT` / derived).
 pub fn derive_local_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
+    Ok(local_data_root(env)?.0)
+}
+
+/// Local bind-mount root plus whether the path was derived (overlay logs that case).
+pub fn local_data_root(env: &ShopEnv) -> Result<(PathBuf, bool), Error> {
     if let Some(p) = env.get("SYNC_DATA_ROOT") {
-        return Ok(PathBuf::from(p));
+        return Ok((PathBuf::from(p), false));
     }
     if let Some(p) = env.get("SHOPWARE_DATA_ROOT") {
-        return Ok(PathBuf::from(p));
+        return Ok((PathBuf::from(p), false));
     }
     let shop_id = require_shop_id(env)?;
     let deploy_env = env.get("SHOPWARE_DEPLOY_ENV").ok_or_else(|| {
@@ -292,7 +297,7 @@ pub fn derive_local_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
             "SHOPWARE_DEPLOY_ENV is required to derive SHOPWARE_DATA_ROOT (live|staging|playground|dev). Set it in .env, or set SHOPWARE_DATA_ROOT / SYNC_DATA_ROOT explicitly.",
         )
     })?;
-    Ok(derived_data_root(env, &shop_id, deploy_env))
+    Ok((derived_data_root(env, &shop_id, deploy_env), true))
 }
 
 /// Alias used by `sync restore` (same resolution as snapshot).

@@ -2,15 +2,19 @@
 //!
 //! Database **dump** is owned by `shopware-cli project dump` — this CLI never
 //! wraps it. Database **import** is `fyrst-cli shopware db import` (also used
-//! by `shopware sync restore --data db`). `init-env` finishes shop-root `.env`
+//! by `shopware sync restore --data db` and `shopware sync sync` when a dump
+//! is already present). `init-env` finishes shop-root `.env`
 //! (recipes `deploy/init-env.sh`). VPS **release** is
 //! `fyrst-cli shopware release`. **Rollback** is
 //! `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`). `sync snapshot`
 //! copies bind-mount trees (not a dump). `sync restore` also restores
-//! bind-mount volumes and opt-in rewrite via compose `web`. `shopware sync-local`
-//! rsyncs VPS upload trees into a local project-dev checkout (never DB). Other
-//! verbs stay stubs. See docs/ADR-0001-shopware-namespace.md.
+//! bind-mount volumes and opt-in rewrite via compose `web`. `shopware sync sync`
+//! pulls bind-mounts over SSH and imports an existing dump (does not dump).
+//! `shopware sync-local` rsyncs VPS upload trees into a local project-dev
+//! checkout (never DB). Other verbs stay stubs. See
+//! docs/ADR-0001-shopware-namespace.md.
 
+mod app;
 mod compose;
 mod data;
 mod env;
@@ -27,6 +31,7 @@ mod rollback;
 mod rollout;
 mod snapshot;
 mod ssh;
+mod sync;
 mod sync_local;
 mod volumes;
 
@@ -77,7 +82,13 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
                 e.exit_code()
             }
         },
-        ShopwareCommand::Sync(SyncCommand::Sync(_)) => not_implemented("shopware sync sync"),
+        ShopwareCommand::Sync(SyncCommand::Sync(op)) => match sync::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
         ShopwareCommand::SyncLocal(op) => match sync_local::run(op) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

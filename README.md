@@ -33,12 +33,16 @@ dump.
 trees into a local `shopware-cli` project-dev checkout (`./public/media/`,
 `./files/`, …). Never the database. Never local `SHOPWARE_DATA_ROOT`.
 
+**Also implemented:** `fyrst-cli shopware sync sync` — cron pull path: rsync
+remote bind-mounts onto this host and import an already-present dump (it does
+**not** dump).
+
 **Dump is not in fyrst-cli.** Database dumps are owned completely by
 `shopware-cli project dump`. This CLI does not provide a dump command and
 does not wrap or shell out to shopware-cli for dump. `--data db` on snapshot
 exits 2 with that instruction.
 
-**Still stub (exit 2):** remaining `shopware` verbs (`sync sync`, `backup`).
+**Still stub (exit 2):** remaining `shopware` verbs (`backup`).
 Snapshot `--data db` still exits 2 (points operators at shopware-cli; not a
 dump wrap).
 
@@ -118,7 +122,7 @@ fyrst-cli shopware rollback           # VPS rollback to .previous-tag
 fyrst-cli shopware db import          # SQL import (this is real)
 fyrst-cli shopware sync snapshot       # volumes; dump = shopware-cli
 fyrst-cli shopware sync restore        # DB + volumes + opt-in rewrite
-fyrst-cli shopware sync sync
+fyrst-cli shopware sync sync           # pull: rsync + import (not dump)
 fyrst-cli shopware sync-local          # VPS → project-dev rsync (never DB)
 fyrst-cli shopware backup backup
 fyrst-cli shopware backup prune
@@ -194,6 +198,9 @@ fyrst-cli shopware sync restore --data db --snapshot-dir /tmp/sw-snap --dry-run
 
 # Bind-mount volumes from snapshot data/<item>/ (or volumes/<item>.tar.gz)
 fyrst-cli shopware sync restore --data media --snapshot-dir /tmp/sw-snap --dry-run
+
+# Cron pull on staging (volumes from live; DB only if db.sql.gz is already in --snapshot-dir)
+fyrst-cli shopware sync sync --from live --skip-db --data media,files --dry-run
 ```
 
 Behaviour (aligned with recipes `restore_db_local` / `restore_db_via_url`):
@@ -221,9 +228,9 @@ Required:
 silently trash production.
 
 - **`db import`:** pass `--allow-live` or set `SYNC_ALLOW_LIVE_RESTORE=1`.
-- **`sync restore`:** same live detection as the overlay; override only with
-  `SYNC_ALLOW_LIVE_RESTORE=1` (not `--allow-live`). Staging/playground/dev
-  do not need extra flags. Opt-in URL rewrite after restore is **never**
+- **`sync restore` / `sync sync`:** same live detection as the overlay; override
+  only with `SYNC_ALLOW_LIVE_RESTORE=1` (not `--allow-live`). Staging/playground/dev
+  do not need extra flags. Opt-in URL rewrite after restore/sync is **never**
   allowed on live, even with `SYNC_ALLOW_LIVE_RESTORE=1`.
 
 Passwords (`MYSQL_PASSWORD`, `DATABASE_URL`) are never printed.

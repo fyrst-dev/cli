@@ -7,7 +7,7 @@ use super::env::{derived_data_root, require_cmd, source_env_for_remote, ShopEnv}
 use super::error::Error;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshSource {
@@ -138,7 +138,7 @@ pub fn probe_ssh(src: &SshSource) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn remote_bash(src: &SshSource, remote_body: &str) -> Result<Output, Error> {
+pub fn spawn_remote_bash(src: &SshSource, remote_body: &str) -> Result<Child, Error> {
     require_cmd("ssh")?;
     let payload = format!(
         "set -euo pipefail\ncd {cd}\nif [[ -f .env ]]; then set -a; source .env; set +a; fi\nif [[ -f .env.prod ]]; then set -a; source .env.prod; set +a; fi\nexport IMAGE=\"${{IMAGE:-}}\" IMAGE_TAG=\"${{IMAGE_TAG:-latest}}\"\n{body}\n",
@@ -155,15 +155,19 @@ pub fn remote_bash(src: &SshSource, remote_body: &str) -> Result<Output, Error> 
         .spawn()
         .map_err(|e| Error::fail(format!("could not exec ssh: {e}")))?;
     {
-        let stdin = child
+        let mut stdin = child
             .stdin
-            .as_mut()
+            .take()
             .ok_or_else(|| Error::fail("internal error: ssh stdin not piped"))?;
         stdin
             .write_all(payload.as_bytes())
             .map_err(|e| Error::fail(format!("could not write ssh payload: {e}")))?;
     }
-    child
+    Ok(child)
+}
+
+pub fn remote_bash(src: &SshSource, remote_body: &str) -> Result<Output, Error> {
+    spawn_remote_bash(src, remote_body)?
         .wait_with_output()
         .map_err(|e| Error::fail(format!("ssh failed: {e}")))
 }
