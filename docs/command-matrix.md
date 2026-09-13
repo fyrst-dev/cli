@@ -17,7 +17,7 @@ Delegated tools:
 
 | Overlay script | CLI | Nested verbs | Flags | Status |
 | --- | --- | --- | --- | --- |
-| `deploy/init-env.sh` | `fyrst-cli shopware init-env` | — | `--shop-id`, `--env`, `--image`, `--vps`, `--generate-app-secret`, `--dry-run` | stub (exit 2) |
+| `deploy/init-env.sh` | `fyrst-cli shopware init-env` | — | `--shop-id`, `--env`, `--image`, `--vps`, `--generate-app-secret`, `--dry-run` | **implemented** |
 | `deploy/vps-release.sh` | `fyrst-cli shopware release` | — | `--dry-run`, `--skip-pull` | stub (exit 2) |
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware rollback` | — | `--dry-run`, `--skip-pull` | stub (exit 2) |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
@@ -29,6 +29,12 @@ Delegated tools:
 
 `shopware sync` with no verb, `shopware backup` with no verb, and
 `shopware db` with no verb, require a subcommand (clap prints help, exit 2).
+
+## Exact init-env CLI
+
+```text
+fyrst-cli shopware init-env [--shop-id SLUG] [--env live|staging|playground|dev] [--image REPO] [--vps] [--generate-app-secret] [--dry-run]
+```
 
 ## Exact import CLI
 
@@ -44,6 +50,34 @@ fyrst-cli shopware sync restore --data db [--snapshot-dir DIR] [--dry-run]
 
 looks for `<snapshot-dir>/db.sql.gz` then `db.sql` and calls the same import
 module. Default `--snapshot-dir` is `<shop>/var/runtime-sync`.
+
+## `shopware init-env` (implemented)
+
+Finish shop-root `.env` after `shopware-cli project create` + Flex. Maps to
+recipes `deploy/init-env.sh`. Does **not** overwrite the whole file, invent
+`MYSQL_*` passwords, or set `APP_URL`. This is **not** a dump command.
+
+Resolves shop root (`COMPOSE_DIR` if set, else walk from cwd for `.env` or
+`.env.example` + `deploy/`). `.env` is `KEY=VALUE` (quotes stripped, **no
+shell expansion**), same parser as import (`src/shopware/envfile.rs`).
+
+1. Copy `.env.example` → `.env` when `.env` is missing; merge **missing** keys
+   from `.env.example` without clobbering existing values.
+2. `--shop-id` is required unless `SHOPWARE_SHOP_ID` is already non-empty in
+   `.env`. Slug: lowercase `[a-z0-9]([a-z0-9-]*[a-z0-9])?`.
+3. `--env` is `live` | `staging` | `playground` | `dev`. Default `live` when
+   unset/empty; keep an existing non-empty value.
+4. `--image` sets `IMAGE` (no whitespace). Unset leaves `IMAGE` as-is.
+5. `--vps` comments out uncommented `COMPOSE_PROJECT_NAME=…` lines (create
+   footgun on a VPS). Does not leave an empty `COMPOSE_PROJECT_NAME=`.
+6. `--generate-app-secret`: `openssl rand -hex 32` only if `APP_SECRET` is
+   empty; the value is never printed.
+7. `--dry-run` prints the summary and does not write `.env`.
+8. After a real write: `chmod 600 .env`.
+
+Refuses a bash xtrace equivalent (`SHELLOPTS=xtrace` / `BASH_XTRACEFD`) so
+credentials in `.env` cannot leak via trace. Summary never prints secret
+values (MYSQL passwords, `APP_SECRET`).
 
 ## `shopware db import` (implemented)
 
@@ -87,6 +121,7 @@ shop-root `.env`. Names match the overlay:
 | Area | Variables (non-exhaustive) |
 | --- | --- |
 | Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`, `COMPOSE_PROJECT_NAME`, `SYNC_ENV` |
+| Init-env | `APP_SECRET` (optional `--generate-app-secret`; never logged), `IMAGE` |
 | Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SYNC_MYSQL_CLIENT_IMAGE`, `SYNC_SNAPSHOT_DIR`, `SYNC_ALLOW_LIVE_RESTORE` |
 | Dump (shopware-cli / overlay only) | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `SYNC_SHOPWARE_CLI_IMAGE`, `SYNC_DUMP_ENGINE`, `SYNC_DUMP_QUICK`, `SYNC_DUMP_CLEAN`, `SYNC_DUMP_ANONYMIZE` |
 | Release | `IMAGE`, `IMAGE_TAG`, `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |

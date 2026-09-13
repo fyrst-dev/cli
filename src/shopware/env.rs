@@ -98,11 +98,51 @@ pub fn resolve_compose_dir(
     )))
 }
 
+fn has_deploy_marker(dir: &Path) -> bool {
+    dir.join("deploy/compose.yaml").is_file()
+        || dir.join("deploy/compose.yml").is_file()
+        || dir.join("deploy").is_dir()
+}
+
 pub fn looks_like_shop_root(dir: &Path) -> bool {
-    dir.join(".env").is_file()
-        && (dir.join("deploy/compose.yaml").is_file()
-            || dir.join("deploy/compose.yml").is_file()
-            || dir.join("deploy").is_dir())
+    dir.join(".env").is_file() && has_deploy_marker(dir)
+}
+
+/// `init-env` may run before `.env` exists (copy from `.env.example`).
+pub fn looks_like_shop_root_init(dir: &Path) -> bool {
+    (dir.join(".env").is_file() || dir.join(".env.example").is_file()) && has_deploy_marker(dir)
+}
+
+/// Shop checkout for `init-env`. Unlike [`resolve_compose_dir`], `.env` may still
+/// be missing when `.env.example` is present. `COMPOSE_DIR` need only be a directory.
+pub fn resolve_compose_dir_init(
+    process: &HashMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, Error> {
+    if let Some(dir) = process.get("COMPOSE_DIR").filter(|s| !s.is_empty()) {
+        let p = PathBuf::from(dir);
+        let p = if p.is_absolute() { p } else { cwd.join(p) };
+        if !p.is_dir() {
+            return Err(Error::fail(format!("Cannot cd to COMPOSE_DIR={dir}")));
+        }
+        return Ok(fs::canonicalize(&p).unwrap_or(p));
+    }
+    let mut dir = cwd.to_path_buf();
+    loop {
+        if looks_like_shop_root_init(&dir) {
+            return Ok(fs::canonicalize(&dir).unwrap_or(dir));
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    if cwd.join(".env").is_file() || cwd.join(".env.example").is_file() {
+        return Ok(fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
+    }
+    Err(Error::fail(format!(
+        "Cannot find shop-root .env or .env.example (cwd={}, COMPOSE_DIR unset). Set COMPOSE_DIR or run from the shop checkout.",
+        cwd.display()
+    )))
 }
 
 fn require_shop_root(p: &Path) -> Result<PathBuf, Error> {
@@ -365,6 +405,30 @@ services:
         assert_eq!(
             resolve_snapshot_dir(Some("/abs/s"), &env, Path::new("/shop")),
             PathBuf::from("/abs/s")
+        );
+    }
+
+    #[test]
+    fn init_compose_dir_allows_example_without_env() {
+        let shop = temp_shop("init-example-only");
+        fs::write(shop.join(".env.example"), "SHOPWARE_SHOP_ID=\n").unwrap();
+        let mut process = HashMap::new();
+        process.insert("COMPOSE_DIR".into(), shop.to_string_lossy().into_owned());
+        let got = resolve_compose_dir_init(&process, Path::new("/tmp")).unwrap();
+        assert_eq!(got, fs::canonicalize(&shop).unwrap());
+        let walked = resolve_compose_dir_init(&HashMap::new(), &shop).unwrap();
+        assert_eq!(walked, fs::canonicalize(&shop).unwrap());
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn init_compose_dir_missing_directory() {
+        let mut process = HashMap::new();
+        process.insert("COMPOSE_DIR".into(), "/no/such/fyrst-cli-shop".into());
+        let err = resolve_compose_dir_init(&process, Path::new("/tmp")).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot cd to COMPOSE_DIR="),
+            "{err}"
         );
     }
 }

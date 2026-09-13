@@ -2,7 +2,8 @@
 //!
 //! Database **dump** is owned by `shopware-cli project dump` — this CLI never
 //! wraps it. Database **import** is `fyrst-cli shopware db import` (also used
-//! by `shopware sync restore --data db`). Other verbs stay stubs until recipe
+//! by `shopware sync restore --data db`). `init-env` finishes shop-root `.env`
+//! (recipes `deploy/init-env.sh`). Other verbs stay stubs until recipe
 //! wrappers exist. See docs/ADR-0001-shopware-namespace.md.
 
 mod data;
@@ -10,6 +11,7 @@ mod env;
 mod envfile;
 mod error;
 mod import;
+mod init_env;
 mod live;
 mod mysql;
 mod restore;
@@ -41,7 +43,13 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
                 e.exit_code()
             }
         },
-        ShopwareCommand::InitEnv(_) => not_implemented("shopware init-env"),
+        ShopwareCommand::InitEnv(op) => match init_env::run(op) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                e.print();
+                e.exit_code()
+            }
+        },
         ShopwareCommand::Release(_) => not_implemented("shopware release"),
         ShopwareCommand::Rollback(_) => not_implemented("shopware rollback"),
         ShopwareCommand::Sync(SyncCommand::Sync(_)) => not_implemented("shopware sync sync"),
