@@ -25,6 +25,10 @@ const IDENTITY_KEYS: &[&str] = &[
 
 const ENV_FILES: &[&str] = &[".env", ".env.prod", "deploy/sync.env"];
 
+/// Overlay `sync-runtime-local.sh` sources shop-root `.env` then `deploy/sync.env`
+/// (not `.env.prod`).
+pub const SYNC_LOCAL_ENV_FILES: &[&str] = &[".env", "deploy/sync.env"];
+
 /// VPS release/rollback load `.env` then `.env.prod` only (no `deploy/sync.env`).
 const VPS_ENV_FILES: &[&str] = &[".env", ".env.prod"];
 
@@ -75,6 +79,14 @@ impl ShopEnv {
         process: &HashMap<String, String>,
     ) -> Result<Self, Error> {
         Self::load_files(compose_dir, process, VPS_ENV_FILES, VPS_PROCESS_WINS)
+    }
+
+    /// Overlay `sync-runtime-local.sh`: `.env` then `deploy/sync.env` (no `.env.prod`).
+    pub fn load_sync_local(
+        compose_dir: PathBuf,
+        process: &HashMap<String, String>,
+    ) -> Result<Self, Error> {
+        Self::load_files(compose_dir, process, SYNC_LOCAL_ENV_FILES, IDENTITY_KEYS)
     }
 
     fn load_files(
