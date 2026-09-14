@@ -7,15 +7,15 @@
 use super::app;
 use super::data::normalize_data;
 use super::env::{
-    derived_data_root, existing_compose_files, is_local_source, local_data_root, require_shop_id,
-    resolve_compose_dir, resolve_snapshot_dir, source_env_for_remote, ShopEnv,
+    existing_compose_files, is_local_source, local_data_root, remote_data_root, require_shop_id,
+    resolve_compose_dir, resolve_snapshot_dir, ShopEnv,
 };
 use super::error::Error;
 use super::import;
 use super::live::{assert_not_live, LivePolicy, LiveSignals};
 use super::mysql::find_snapshot_dump;
 use super::rewrite;
-use super::ssh::{probe_ssh, probe_ssh_dry_run_line, remote_bash, resolve_ssh_source, SshSource};
+use super::ssh::{probe_ssh, probe_ssh_dry_run_line, resolve_ssh_source, SshSource};
 use super::volumes;
 use crate::cli::SyncOpArgs;
 use std::collections::HashMap;
@@ -82,11 +82,10 @@ fn run_with(
     let compose_files = existing_compose_files(&compose_dir);
 
     println!(
-        "==> Runtime data sync  from={from}  data={}  shop={shop_id}  deploy_env={}  project={}  env={}  data_root={}  snapshot_dir={}  compose_dir={}  dry-run={}",
+        "==> Runtime data sync  from={from}  data={}  shop={shop_id}  deploy_env={}  project={}  data_root={}  snapshot_dir={}  compose_dir={}  dry-run={}",
         selection.items_csv(),
         env.get("SHOPWARE_DEPLOY_ENV").unwrap_or("unset"),
         if project.is_empty() { "unset" } else { project.as_str() },
-        env.get("SYNC_ENV").unwrap_or("unset"),
         data_root.display(),
         snapshot_dir.display(),
         compose_dir.display(),
@@ -114,10 +113,7 @@ fn run_with(
     }
 
     let ssh = resolve_ssh_source(&from, &env)?;
-    println!(
-        "==> SSH {} port {}  remote={}",
-        ssh.target, ssh.port, ssh.remote_path
-    );
+    println!("==> SSH {} port {}", ssh.target, ssh.port);
     run_remote(
         &env,
         &signals,
@@ -165,9 +161,9 @@ fn run_local(
         compose_files,
     );
     println!(
-        "==> Sync finished from local → {} (SYNC_ENV={})",
+        "==> Sync finished from local → {} (SHOPWARE_DEPLOY_ENV={})",
         data_root.display(),
-        env.get("SYNC_ENV").unwrap_or("unset")
+        env.get("SHOPWARE_DEPLOY_ENV").unwrap_or("unset")
     );
     if missing_dump {
         return Err(Error::fail(dump_operator_instructions(snapshot_dir)));
@@ -196,7 +192,7 @@ fn run_remote(
         probe_ssh(ssh)?;
     }
 
-    let remote_root = resolve_remote_data_root(ssh, env, from, shop_id, dry_run)?;
+    let remote_root = resolve_remote_data_root(ssh, env, shop_id, dry_run)?;
     let missing_dump = db_missing(selection, snapshot_dir);
     if !dry_run && missing_dump {
         return Err(Error::fail(dump_operator_instructions(snapshot_dir)));
@@ -225,9 +221,9 @@ fn run_remote(
         compose_files,
     );
     println!(
-        "==> Sync finished from {from} → {} (SYNC_ENV={})",
+        "==> Sync finished from {from} → {} (SHOPWARE_DEPLOY_ENV={})",
         data_root.display(),
-        env.get("SYNC_ENV").unwrap_or("unset")
+        env.get("SHOPWARE_DEPLOY_ENV").unwrap_or("unset")
     );
     if missing_dump {
         return Err(Error::fail(dump_operator_instructions(snapshot_dir)));
@@ -260,7 +256,6 @@ fn import_db_if_present(
 fn resolve_remote_data_root(
     ssh: &SshSource,
     env: &ShopEnv,
-    from: &str,
     shop_id: &str,
     dry_run: bool,
 ) -> Result<PathBuf, Error> {
@@ -268,38 +263,18 @@ fn resolve_remote_data_root(
         println!("==> Remote bind-mount root: {}", p.display());
         return Ok(p.clone());
     }
-    let source_env = source_env_for_remote(from, env);
+    let p = remote_data_root(env, shop_id);
     if dry_run {
-        let p = derived_data_root(env, shop_id, &source_env);
         println!(
-            "==> DRY-RUN remote SHOPWARE_DATA_ROOT derived {} (probe skipped)",
+            "==> DRY-RUN remote data root derived {} (probe skipped)",
             p.display()
         );
-        return Ok(p);
+    } else {
+        println!(
+            "==> Remote bind-mount root derived: {} (shop={shop_id} env=live)",
+            p.display()
+        );
     }
-    let probed = remote_bash(
-        ssh,
-        "printf %s \"${SYNC_DATA_ROOT:-${SHOPWARE_DATA_ROOT:-}}\"",
-    )
-    .ok()
-    .and_then(|out| {
-        let s = String::from_utf8_lossy(&out.stdout);
-        s.lines()
-            .map(|l| l.trim().trim_end_matches('\r'))
-            .filter(|l| !l.is_empty())
-            .last()
-            .map(str::to_string)
-    })
-    .filter(|s| !s.is_empty());
-    if let Some(p) = probed {
-        println!("==> Remote bind-mount root: {p}");
-        return Ok(PathBuf::from(p));
-    }
-    let p = derived_data_root(env, shop_id, &source_env);
-    println!(
-        "==> Remote bind-mount root derived: {} (shop={shop_id} env={source_env})",
-        p.display()
-    );
     Ok(p)
 }
 

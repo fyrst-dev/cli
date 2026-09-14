@@ -41,7 +41,7 @@ pub fn execute_rollback(
     process.remove("IMAGE_TAG");
     process.insert("IMAGE_TAG".into(), image_tag.clone());
 
-    let env = ShopEnv::load_vps(compose_dir, &process)?;
+    let env = ShopEnv::load(compose_dir, &process)?;
     let ctx = bootstrap(&env, skip_pull, dry_run)?;
 
     for w in &ctx.warnings {

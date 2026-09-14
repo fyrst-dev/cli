@@ -73,6 +73,10 @@ const LEAK_KEYS: &[&str] = &[
     "SHOPWARE_DEPLOY_ENV",
     "SHOPWARE_DATA_ROOT",
     "SHOPWARE_DATA_BASE",
+    "SHOPWARE_SSH_HOST",
+    "SHOPWARE_SSH_USER",
+    "SHOPWARE_SSH_KEY",
+    "SHOPWARE_REMOTE_DATA_ROOT",
     "SYNC_DATA_ROOT",
     "SYNC_SNAPSHOT_DIR",
     "SYNC_ENV",
@@ -337,8 +341,8 @@ fn remote_from_dry_run_volumes_over_ssh() {
     let shop = TempShop::new("ssh");
     shop.write_min_shop();
     fs::write(
-        shop.path().join("deploy/sync.env"),
-        "SYNC_REMOTE_PATH=/opt/shopware/acme\nSYNC_REMOTE_DATA_ROOT=/var/lib/shopware/data/acme/live\n",
+        shop.path().join(".env.local"),
+        "SHOPWARE_REMOTE_DATA_ROOT=/var/lib/shopware/data/acme/live\n",
     )
     .unwrap();
     let snap = shop.path().join("var/runtime-sync");
@@ -375,8 +379,8 @@ fn remote_all_dry_run_volumes_plus_dump_instruction() {
     let shop = TempShop::new("ssh-all");
     shop.write_min_shop();
     fs::write(
-        shop.path().join("deploy/sync.env"),
-        "SYNC_REMOTE_PATH=/opt/shopware/acme\nSYNC_LIVE_DATA_ROOT=/data/live\n",
+        shop.path().join(".env.local"),
+        "SHOPWARE_REMOTE_DATA_ROOT=/data/live\n",
     )
     .unwrap();
     let out = snapshot(

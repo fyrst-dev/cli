@@ -2,7 +2,7 @@
 //!
 //! Layout: `--snapshot-dir/data/<item>/` for bind-mount rsync, or
 //! `--snapshot-dir/volumes/<item>.tar.gz` when the bind-mount is missing
-//! (named volume via `SYNC_ARCHIVE_IMAGE`, default `alpine:3.20`).
+//! (named volume via `alpine:3.20`).
 //! Never runs shopware-cli.
 
 use super::env::{derive_project_name, have_cmd, ShopEnv};
@@ -84,17 +84,9 @@ pub fn snapshot_bind_local(
         );
         if dry_run {
             if command_exists("rsync") {
-                println!(
-                    "==> DRY-RUN rsync {}/ {}/",
-                    src.display(),
-                    dest.display()
-                );
+                println!("==> DRY-RUN rsync {}/ {}/", src.display(), dest.display());
             } else {
-                println!(
-                    "==> DRY-RUN cp -a {}/. {}/",
-                    src.display(),
-                    dest.display()
-                );
+                println!("==> DRY-RUN cp -a {}/. {}/", src.display(), dest.display());
             }
             return Ok(());
         }

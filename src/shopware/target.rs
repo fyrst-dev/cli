@@ -56,12 +56,12 @@ pub fn artifact_relpath(shop_id: &str, deploy_env: &str, stamp: &str) -> String 
     format!("{shop_id}/{deploy_env}/{stamp}")
 }
 
-/// `default_port` is `BACKUP_SSH_PORT` (overlay default `22`), overridden by `ssh://`.
+/// `default_port` is `22` unless `ssh://` includes a port.
 pub fn parse_backup_target(raw: &str, default_port: &str) -> Result<BackupTarget, Error> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(Error::fail(
-            "BACKUP_TARGET is required (local path, second disk, or user@host:/path). See deploy/backup.env.example.",
+            "BACKUP_TARGET is required (local path, second disk, or user@host:/path). Default is local.",
         ));
     }
 

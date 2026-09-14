@@ -74,6 +74,7 @@ const LEAK_KEYS: &[&str] = &[
     "MYSQL_DATABASE",
     "MYSQL_ROOT_PASSWORD",
     "DATABASE_URL",
+    "SHOPWARE_ALLOW_LIVE_RESTORE",
     "SYNC_MYSQL_CLIENT_IMAGE",
     "SYNC_SNAPSHOT_DIR",
     "SYNC_ALLOW_LIVE_RESTORE",
@@ -342,7 +343,7 @@ MYSQL_DATABASE=shopware
     let out = restore(shop.path(), &["--dry-run", "--data", "db"]);
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
     assert!(
-        stderr(&out).contains("SYNC_ALLOW_LIVE_RESTORE"),
+        stderr(&out).contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
         "{}",
         stderr(&out)
     );
@@ -359,7 +360,7 @@ SHOPWARE_DEPLOY_ENV=live
 MYSQL_USER=shop
 MYSQL_PASSWORD=super-secret-pass
 MYSQL_DATABASE=shopware
-SYNC_ALLOW_LIVE_RESTORE=1
+SHOPWARE_ALLOW_LIVE_RESTORE=1
 ",
     )
     .unwrap();

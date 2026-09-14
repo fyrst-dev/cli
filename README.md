@@ -120,23 +120,34 @@ See the [Shopware CLI dump docs](https://developer.shopware.com/docs/products/to
 
 ### Live hosts
 
-A live consumer (`SHOPWARE_DEPLOY_ENV=live`, also `SYNC_ENV=live`, a checkout
-named `live`, or hostname `live`) is refused by default.
+A live consumer (`SHOPWARE_DEPLOY_ENV=live`, a checkout named `live`, or
+hostname `live`) is refused by default.
 
 | Command | Gate |
 | --- | --- |
-| `db import` | `--allow-live` or `SYNC_ALLOW_LIVE_RESTORE=1` |
-| `sync apply` / `sync pull` | `SYNC_ALLOW_LIVE_RESTORE=1` only |
-| `backup recover` | `--i-understand-this-restores-this-host` (or `BACKUP_CONFIRM_RESTORE=1`), **and** `BACKUP_ALLOW_LIVE_RESTORE=1` when `SHOPWARE_DEPLOY_ENV=live` |
+| `db import` | `--allow-live` or `SHOPWARE_ALLOW_LIVE_RESTORE=1` |
+| `sync apply` / `sync pull` | `SHOPWARE_ALLOW_LIVE_RESTORE=1` only |
+| `backup recover` | `--i-understand-this-restores-this-host` (or `BACKUP_CONFIRM_RESTORE=1`), **and** `SHOPWARE_ALLOW_LIVE_RESTORE=1` when `SHOPWARE_DEPLOY_ENV=live` |
 
 `backup create` / `backup prune` are allowed on live (that is the cron path).
-Opt-in URL rewrite after apply is never allowed on live. Passwords are never
-printed.
+URL rewrite after apply uses `APP_URL` and is skipped on live. Passwords are
+never printed.
 
 ## Usage
 
 Run from the shop checkout (directory with `.env`), or set `COMPOSE_DIR`.
 `--dry-run` prints the plan and does not write, copy, import, or delete.
+
+Every shopware verb uses one loader: process env, then `.env`, `.env.local` if
+present, `.env.prod` if present. Later files win except identity / process-win
+keys. Do not use `deploy/sync.env` or `deploy/backup.env`.
+
+Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, optional
+`SHOPWARE_DATA_BASE` (default `/var/lib/shopware/data`) or
+`SHOPWARE_DATA_ROOT`. Laptop SSH: `SHOPWARE_SSH_HOST` / `USER` / `KEY` in
+`.env.local` (host defaults to the `--from` alias). Remote live data:
+`SHOPWARE_REMOTE_DATA_ROOT` or `{data_base}/{shop_id}/live`. Rewrite:
+`APP_URL`. Live gate: `SHOPWARE_ALLOW_LIVE_RESTORE`.
 
 ### env init
 
@@ -206,9 +217,10 @@ After `sync local`: `shopware-cli project console cache:clear`.
 
 ### backup create / prune / recover
 
-Needs `BACKUP_TARGET` (local path or SSH), `SHOPWARE_SHOP_ID`, and
-`SHOPWARE_DEPLOY_ENV`. Create copies bind-mount trees and an operator-provided
-dump (`BACKUP_DB_DUMP`) into a timestamped artifact — it does not dump. Prune
+Needs `SHOPWARE_SHOP_ID` and `SHOPWARE_DEPLOY_ENV`. `BACKUP_TARGET` is a local
+path or SSH URL (default `local` under the shop). SSH targets reuse
+`SHOPWARE_SSH_*`. Create copies bind-mount trees and an operator-provided dump
+(`BACKUP_DB_DUMP`) into a timestamped artifact — it does not dump. Prune
 deletes stamp dirs older than `BACKUP_KEEP_DAYS` (default 14; `0` = keep
 forever). Recover is disaster recovery onto **this host**, not live→staging
 sync.
@@ -224,7 +236,7 @@ fyrst-cli shopware backup recover --artifact 20260912T020000Z \
   --i-understand-this-restores-this-host --dry-run
 fyrst-cli shopware backup recover --artifact 20260912T020000Z \
   --i-understand-this-restores-this-host
-BACKUP_ALLOW_LIVE_RESTORE=1 fyrst-cli shopware backup recover --artifact 20260912T020000Z \
+SHOPWARE_ALLOW_LIVE_RESTORE=1 fyrst-cli shopware backup recover --artifact 20260912T020000Z \
   --i-understand-this-restores-this-host
 ```
 

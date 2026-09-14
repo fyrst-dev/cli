@@ -70,11 +70,15 @@ const LEAK_KEYS: &[&str] = &[
     "SHOPWARE_DATA_BASE",
     "BACKUP_TARGET",
     "BACKUP_KEEP_DAYS",
+    "BACKUP_DB_DUMP",
+    "SHOPWARE_SSH_HOST",
+    "SHOPWARE_SSH_USER",
+    "SHOPWARE_SSH_KEY",
     "BACKUP_SSH_KEY",
     "BACKUP_SSH_PORT",
-    "BACKUP_DB_DUMP",
     "SYNC_ENV",
     "SYNC_ALLOW_LIVE_RESTORE",
+    "BACKUP_ALLOW_LIVE_RESTORE",
 ];
 
 fn backup(shop: &Path, extra_env: &[(&str, &str)], extra: &[&str]) -> Output {
@@ -121,14 +125,20 @@ fn backup_help_lists_flags() {
 }
 
 #[test]
-fn missing_backup_target_exits_1() {
+fn default_backup_target_is_local() {
     let shop = TempShop::new("no-tgt");
     shop.write_shop("live");
     let out = backup(shop.path(), &[], &["--dry-run", "--data", "media"]);
-    assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
-    let err = stderr(&out);
-    assert!(err.contains("BACKUP_TARGET"), "{err}");
-    assert!(!err.contains("not implemented"), "{err}");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={} stdout={}",
+        stderr(&out),
+        stdout(&out)
+    );
+    let log = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(log.contains("local"), "{log}");
+    assert!(!log.contains("not implemented"), "{log}");
 }
 
 #[test]

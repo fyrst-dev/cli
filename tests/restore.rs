@@ -79,11 +79,14 @@ const LEAK_KEYS: &[&str] = &[
     "SHOPWARE_DEPLOY_ENV",
     "SHOPWARE_DATA_ROOT",
     "SHOPWARE_DATA_BASE",
+    "SHOPWARE_ALLOW_LIVE_RESTORE",
     "MYSQL_USER",
     "MYSQL_PASSWORD",
     "MYSQL_DATABASE",
     "MYSQL_ROOT_PASSWORD",
     "DATABASE_URL",
+    "IMAGE",
+    "APP_URL",
     "SYNC_MYSQL_CLIENT_IMAGE",
     "SYNC_SNAPSHOT_DIR",
     "SYNC_ALLOW_LIVE_RESTORE",
@@ -93,8 +96,6 @@ const LEAK_KEYS: &[&str] = &[
     "SYNC_POST_RESTORE_CMD",
     "SYNC_ARCHIVE_IMAGE",
     "SYNC_DATA_ROOT",
-    "IMAGE",
-    "APP_URL",
     "SYNC_APP_URL",
 ];
 
@@ -142,7 +143,6 @@ fn volume_dry_run_prints_rsync_plan() {
     assert!(log.contains("data/media"), "{log}");
     assert!(log.contains("would stop web/worker/scheduler"), "{log}");
     assert!(log.contains("cache:clear"), "{log}");
-    assert!(log.contains("SYNC_POST_RESTORE_CMD"), "{log}");
     assert!(
         log.contains("Sales-channel domains were not rewritten"),
         "{log}"
@@ -172,7 +172,7 @@ SHOPWARE_DATA_ROOT={}
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
     assert!(stderr(&out).contains("live"), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("SYNC_ALLOW_LIVE_RESTORE"),
+        stderr(&out).contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
         "{}",
         stderr(&out)
     );
@@ -188,7 +188,7 @@ fn volume_only_live_allowed_via_env() {
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=live
 MYSQL_PASSWORD=super-secret-pass
-SYNC_ALLOW_LIVE_RESTORE=1
+SHOPWARE_ALLOW_LIVE_RESTORE=1
 SHOPWARE_DATA_ROOT={}
 ",
             shop.path().join("data-root").display()
@@ -212,7 +212,7 @@ fn rewrite_skipped_when_skip_db() {
     let shop = TempShop::new("rew-skip");
     shop.write_staging();
     let mut env = fs::read_to_string(shop.path().join(".env")).unwrap();
-    env.push_str("SYNC_REWRITE_APP_URL=https://staging.example.com\n");
+    env.push_str("APP_URL=https://staging.example.com\n");
     fs::write(shop.path().join(".env"), env).unwrap();
     shop.write_media_tree();
     let out = restore(shop.path(), &["--dry-run", "--data", "media"]);
@@ -229,7 +229,7 @@ fn rewrite_skipped_when_skip_db() {
 }
 
 #[test]
-fn rewrite_refused_on_live_even_with_allow() {
+fn rewrite_skipped_on_live_even_with_allow() {
     let shop = TempShop::new("rew-live");
     fs::write(
         shop.path().join(".env"),
@@ -239,8 +239,8 @@ SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=live
 MYSQL_USER=shop
 MYSQL_PASSWORD=super-secret-pass
-SYNC_ALLOW_LIVE_RESTORE=1
-SYNC_REWRITE_APP_URL=https://staging.example.com
+SHOPWARE_ALLOW_LIVE_RESTORE=1
+APP_URL=https://staging.example.com
 SHOPWARE_DATA_ROOT={}
 ",
             shop.path().join("data-root").display()
@@ -255,18 +255,17 @@ SHOPWARE_DATA_ROOT={}
     shop.write_dump();
     shop.write_media_tree();
     let out = restore(shop.path(), &["--dry-run", "--data", "db"]);
-    assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let log = stdout(&out);
     assert!(
-        stderr(&out).contains("Refusing sales-channel domain rewrite on a live host"),
-        "{}",
-        stderr(&out)
+        log.contains("Skipping sales-channel domain rewrite on a live host"),
+        "{log}"
     );
     assert!(
-        stderr(&out).contains("SYNC_ALLOW_LIVE_RESTORE=1 does not bypass"),
-        "{}",
-        stderr(&out)
+        !log.contains("fyrst:sales-channel:rewrite-urls"),
+        "must not run rewrite on live:\n{log}"
     );
-    let combined = format!("{}{}", stdout(&out), stderr(&out));
+    let combined = format!("{log}{}", stderr(&out));
     assert!(!combined.contains("super-secret-pass"), "{combined}");
 }
 
@@ -275,7 +274,7 @@ fn rewrite_dry_run_is_compose_console() {
     let shop = TempShop::new("rew-run");
     shop.write_staging();
     let mut env = fs::read_to_string(shop.path().join(".env")).unwrap();
-    env.push_str("SYNC_REWRITE_APP_URL=https://staging.example.com\nSYNC_ENV=staging\n");
+    env.push_str("APP_URL=https://staging.example.com\n");
     fs::write(shop.path().join(".env"), env).unwrap();
     shop.write_dump();
     let out = restore(shop.path(), &["--dry-run", "--data", "db"]);

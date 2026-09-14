@@ -677,7 +677,7 @@ DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
         .unwrap();
         let mut process = HashMap::new();
         process.insert("IMAGE_TAG".into(), "abc123".into());
-        let env = ShopEnv::load_vps(shop.0.clone(), &process).unwrap();
+        let env = ShopEnv::load(shop.0.clone(), &process).unwrap();
         let ctx = bootstrap(&env, true, true).unwrap();
         assert_eq!(ctx.image_tag, "abc123");
         assert_eq!(ctx.image, "ghcr.io/file/shop");
@@ -710,7 +710,7 @@ DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
             "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=dev\nIMAGE=x\nIMAGE_TAG=t\n",
         )
         .unwrap();
-        let env = ShopEnv::load_vps(shop.0.clone(), &HashMap::new()).unwrap();
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
         let err = match bootstrap(&env, false, true) {
             Err(e) => e,
             Ok(_) => panic!("expected missing compose.vps.yaml"),

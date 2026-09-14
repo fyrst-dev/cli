@@ -43,10 +43,9 @@ MYSQL_USER=shop
 MYSQL_PASSWORD=super-secret-pass
 MYSQL_DATABASE=shopware
 SHOPWARE_DATA_ROOT={}
-SYNC_SSH_HOST=live.example.com
-SYNC_SSH_USER=deploy
-SYNC_REMOTE_PATH=/opt/shopware/acme-live
-SYNC_REMOTE_DATA_ROOT=/var/lib/shopware/data/acme/live
+SHOPWARE_SSH_HOST=live.example.com
+SHOPWARE_SSH_USER=deploy
+SHOPWARE_REMOTE_DATA_ROOT=/var/lib/shopware/data/acme/live
 ",
                 data.display()
             ),
@@ -70,18 +69,17 @@ MYSQL_USER=shop
 MYSQL_PASSWORD=super-secret-pass
 MYSQL_DATABASE=shopware
 SHOPWARE_DATA_ROOT={}
-SYNC_SSH_HOST=live.example.com
-SYNC_SSH_USER=deploy
-SYNC_REMOTE_PATH=/opt/shopware/acme-live
-SYNC_REMOTE_DATA_ROOT=/var/lib/shopware/data/acme/live
+SHOPWARE_SSH_HOST=live.example.com
+SHOPWARE_SSH_USER=deploy
+SHOPWARE_REMOTE_DATA_ROOT=/var/lib/shopware/data/acme/live
 ",
             data.display()
         );
         if allow {
-            body.push_str("SYNC_ALLOW_LIVE_RESTORE=1\n");
+            body.push_str("SHOPWARE_ALLOW_LIVE_RESTORE=1\n");
         }
         if rewrite {
-            body.push_str("SYNC_REWRITE_APP_URL=https://staging.example.com\n");
+            body.push_str("APP_URL=https://staging.example.com\n");
         }
         fs::write(self.0.join(".env"), body).unwrap();
         fs::write(
@@ -110,6 +108,12 @@ const LEAK_KEYS: &[&str] = &[
     "MYSQL_DATABASE",
     "MYSQL_ROOT_PASSWORD",
     "DATABASE_URL",
+    "SHOPWARE_ALLOW_LIVE_RESTORE",
+    "SHOPWARE_SSH_HOST",
+    "SHOPWARE_SSH_USER",
+    "SHOPWARE_SSH_KEY",
+    "SHOPWARE_REMOTE_DATA_ROOT",
+    "APP_URL",
     "SYNC_MYSQL_CLIENT_IMAGE",
     "SYNC_SNAPSHOT_DIR",
     "SYNC_ALLOW_LIVE_RESTORE",
@@ -345,7 +349,7 @@ fn live_volume_only_refuses_without_env() {
     );
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
     assert!(
-        stderr(&out).contains("SYNC_ALLOW_LIVE_RESTORE"),
+        stderr(&out).contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
         "{}",
         stderr(&out)
     );
@@ -383,7 +387,7 @@ fn live_allow_env_volume_dry_run_warns() {
 }
 
 #[test]
-fn rewrite_refused_on_live_even_with_allow() {
+fn rewrite_skipped_on_live_even_with_allow() {
     let shop = TempShop::new("live-rw");
     shop.write_live(true, true);
     let out = sync_cmd(
@@ -397,12 +401,20 @@ fn rewrite_refused_on_live_even_with_allow() {
             "media",
         ],
     );
-    assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
-    assert!(stderr(&out).contains("rewrite"), "{}", stderr(&out));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={} stdout={}",
+        stderr(&out),
+        stdout(&out)
+    );
+    let all = combined(&out);
+    assert!(all.contains("live"), "{all}");
     assert!(
-        stderr(&out).contains("SYNC_ALLOW_LIVE_RESTORE"),
+        stdout(&out).contains("Skipping sales-channel domain rewrite")
+            || stdout(&out).contains("DRY-RUN rsync"),
         "{}",
-        stderr(&out)
+        stdout(&out)
     );
 }
 
@@ -413,7 +425,7 @@ fn rewrite_skipped_when_skip_db() {
     fs::write(
         shop.path().join(".env"),
         format!(
-            "{}\nSYNC_REWRITE_APP_URL=https://staging.example.com\n",
+            "{}\nAPP_URL=https://staging.example.com\n",
             fs::read_to_string(shop.path().join(".env")).unwrap().trim()
         ),
     )

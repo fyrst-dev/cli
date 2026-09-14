@@ -34,8 +34,8 @@ those scripts. Use the CLI column.
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware deploy rollback` | `rollback` | `--dry-run`, `--skip-pull` | **implemented** |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
 | `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync capture` | `capture` | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **volumes implemented** (bind-mount trees → `--snapshot-dir/data/<item>/`; named-volume tar fallback). **Not a dump command:** `--data db` exits 2 and tells operators to run `shopware-cli project dump` |
-| `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync apply` | `apply` | same flags | **implemented**: DB via same import module; bind-mount volumes from `data/<item>/` or `volumes/<item>.tar.gz`; stop/start `web`/`worker`/`scheduler`; opt-in rewrite via compose `web`; live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1`; rewrite never on live |
-| `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync pull` | `pull` | same flags | **implemented** (pull orchestration): rsync remote bind-mounts; DB imports an already-present dump (does **not** dump). Live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1` |
+| `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync apply` | `apply` | same flags | **implemented**: DB via same import module; bind-mount volumes from `data/<item>/` or `volumes/<item>.tar.gz`; stop/start `web`/`worker`/`scheduler`; rewrite from `APP_URL` via compose `web`; live refuse unless `SHOPWARE_ALLOW_LIVE_RESTORE=1`; rewrite skipped on live |
+| `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync pull` | `pull` | same flags | **implemented** (pull orchestration): rsync remote bind-mounts; DB imports an already-present dump (does **not** dump). Live refuse unless `SHOPWARE_ALLOW_LIVE_RESTORE=1` |
 | `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync local` | `local` | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | **implemented** (VPS → local project-dev rsync; never DB; never `SHOPWARE_DATA_ROOT`; `--data all` refused) |
 | `deploy/backup-runtime.sh` backup | `fyrst-cli shopware backup create` | `create` | `--data`, `--dry-run` | **implemented** (volumes + operator `db.sql.gz`; **not** a dump wrap; live allowed) |
 | `deploy/backup-runtime.sh` prune | `fyrst-cli shopware backup prune` | `prune` | `--data` (ignored; stamp-based), `--dry-run` | **implemented** (retention under `BACKUP_TARGET`; not a dump) |
@@ -48,21 +48,44 @@ Hard cut (old clap names removed): `init-env` → `env init`; top-level `release
 
 ## Live policy
 
-Refuse a live consumer unless the gate below is set. Three dialects on
-purpose; this table is the operator cheat-sheet (also in `shopware --help`).
+Refuse a live consumer unless the gate below is set. One live-restore flag
+for apply, pull, import, and backup recover (also in `shopware --help`).
 
 **sync = between environments / workdir. backup = off-host disaster recovery.**
 
 | Command | Gate |
 | --- | --- |
-| `db import` | `--allow-live` or `SYNC_ALLOW_LIVE_RESTORE=1` |
-| `sync apply` | `SYNC_ALLOW_LIVE_RESTORE=1` only |
-| `sync pull` | `SYNC_ALLOW_LIVE_RESTORE=1` only |
-| `backup recover` | confirm flag (`--i-understand-this-restores-this-host` or `BACKUP_CONFIRM_RESTORE=1`) **and** `BACKUP_ALLOW_LIVE_RESTORE=1` when `SHOPWARE_DEPLOY_ENV=live` |
+| `db import` | `--allow-live` or `SHOPWARE_ALLOW_LIVE_RESTORE=1` |
+| `sync apply` | `SHOPWARE_ALLOW_LIVE_RESTORE=1` only |
+| `sync pull` | `SHOPWARE_ALLOW_LIVE_RESTORE=1` only |
+| `backup recover` | confirm flag (`--i-understand-this-restores-this-host` or `BACKUP_CONFIRM_RESTORE=1`) **and** `SHOPWARE_ALLOW_LIVE_RESTORE=1` when `SHOPWARE_DEPLOY_ENV=live` |
 
-Opt-in URL rewrite after apply is **never** allowed on
-live, even with `SYNC_ALLOW_LIVE_RESTORE=1`. Staging / playground / dev need no
-extra live flag for backup recover (still need confirmation).
+URL rewrite after apply uses `APP_URL` and is **skipped** on live (never
+applied). Staging / playground / dev need no extra live flag for backup
+recover (still need confirmation).
+
+## Shop env files
+
+One loader for every shopware verb. Process env is the base, then later files
+win except identity / process-win keys (a non-empty process value still owns
+those):
+
+1. `.env`
+2. `.env.local` if present (laptop SSH / extras)
+3. `.env.prod` if present (VPS)
+
+Never `deploy/sync.env` or `deploy/backup.env`. Leftover `SYNC_*` /
+`BACKUP_SSH_*` / `BACKUP_ALLOW_*` / `SYNC_APP_URL` fail when the replacement
+is unset (no silent aliases). `deploy/*.env` stays gitignored so leftover
+operator files are not committed; stop documenting them.
+
+Data root: `{SHOPWARE_DATA_BASE}/{SHOPWARE_SHOP_ID}/{SHOPWARE_DEPLOY_ENV}`
+(`SHOPWARE_DATA_BASE` default `/var/lib/shopware/data`). Optional override:
+`SHOPWARE_DATA_ROOT`. SSH: `SHOPWARE_SSH_HOST` (defaults to the `--from`
+alias), `SHOPWARE_SSH_USER`, `SHOPWARE_SSH_KEY`. Port is always `22`. Remote
+live data: `SHOPWARE_REMOTE_DATA_ROOT` or `{data_base}/{shop_id}/live`.
+Rewrite: `APP_URL` only. CI `VPS_*` secrets stay secrets — they are not shop
+`.env`.
 
 ## Exact env init CLI
 
@@ -78,9 +101,10 @@ fyrst-cli shopware deploy release [--dry-run] [--skip-pull]
 
 ## `shopware deploy release` (implemented)
 
-Resolves shop root (`COMPOSE_DIR` or walk from cwd), loads `.env` then `.env.prod`
-(not `deploy/sync.env`). Process-env `IMAGE` / `IMAGE_TAG` (and other VPS knobs)
-win when non-empty — CI tags beat `.env` `IMAGE_TAG=latest`. Requires `IMAGE`,
+Resolves shop root (`COMPOSE_DIR` or walk from cwd), loads `.env` then
+`.env.local` then `.env.prod` (never `deploy/*.env`). Process-env `IMAGE` /
+`IMAGE_TAG` (and other VPS knobs) win when non-empty — CI tags beat `.env`
+`IMAGE_TAG=latest`. Requires `IMAGE`,
 `IMAGE_TAG`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, and all three compose files.
 
 Compose is always:
@@ -174,7 +198,7 @@ fyrst-cli shopware deploy rollback [--dry-run] [--skip-pull]
 ## `shopware deploy rollback` (implemented)
 
 Resolves shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`),
-loads `.env` then `.env.prod`. Process-env wins for `IMAGE`, `SMOKE_URL`,
+loads `.env` then `.env.local` then `.env.prod`. Process-env wins for `IMAGE`, `SMOKE_URL`,
 `COMPOSE_PROFILES`, `SKIP_PULL`, `PULL_POLICY` when non-empty. **`IMAGE_TAG`
 from the process environment is ignored** — the only tag is shop-root
 `.previous-tag` (overlay `vps_read_previous_tag`). Missing or empty
@@ -225,30 +249,29 @@ It is not `sync apply` (clone live→staging).
 ## `shopware db import` (implemented)
 
 Resolves shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`),
-loads `.env` then `.env.prod` then `deploy/sync.env` (identity keys from the
-process environment win when non-empty). Requires `SHOPWARE_SHOP_ID`.
+loads `.env` then `.env.local` then `.env.prod` (identity / process-win keys
+from the process environment win when non-empty). Requires `SHOPWARE_SHOP_ID`.
 
 1. If a compose `mysql` service is present: on execute,
    `docker compose … up -d --no-build mysql`, wait until pingable, then
    `gzip -dc FILE | docker compose --env-file .env -f … exec -T mysql sh -c
    '<mysql|mariadb>'` (plain `.sql` is stdin, not gzip).
 2. Else `DATABASE_URL` to a real host: `gzip -dc FILE | docker run --rm -i
-   --network host <mysql:8.4|mariadb:11.4> mysql <database>`. Override image
-   with `SYNC_MYSQL_CLIENT_IMAGE`. Host `mysql` without a bundled service is
-   refused.
+   --network host <mysql:8.4|mariadb:11.4> mysql <database>`. Host `mysql`
+   without a bundled service is refused.
 3. `--dry-run` prints that pipeline **without** passwords / `MYSQL_PWD` /
    `DATABASE_URL` and does not call Docker.
 
-Live consumer (`SHOPWARE_DEPLOY_ENV`, `SYNC_ENV`, checkout basename, or
-hostname equal to `live`, case-insensitive):
+Live consumer (`SHOPWARE_DEPLOY_ENV`, checkout basename, or hostname equal to
+`live`, case-insensitive):
 
 | Command | Default | Override |
 | --- | --- | --- |
-| `db import` | refuse | `--allow-live` or `SYNC_ALLOW_LIVE_RESTORE=1` |
-| `sync apply` | refuse (overlay rules) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
-| `sync pull` | refuse (overlay `assert_not_live_restore`) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
-| opt-in rewrite after apply | refuse on live | **none** — `SYNC_ALLOW_LIVE_RESTORE=1` does not bypass |
-| `backup recover` | refuse when `SHOPWARE_DEPLOY_ENV=live` | `BACKUP_ALLOW_LIVE_RESTORE=1` (then inner apply sets `SYNC_ALLOW_LIVE_RESTORE=1`) |
+| `db import` | refuse | `--allow-live` or `SHOPWARE_ALLOW_LIVE_RESTORE=1` |
+| `sync apply` | refuse | `SHOPWARE_ALLOW_LIVE_RESTORE=1` only |
+| `sync pull` | refuse | `SHOPWARE_ALLOW_LIVE_RESTORE=1` only |
+| rewrite after apply | skipped on live | **none** — rewrite is never applied on live |
+| `backup recover` | refuse when `SHOPWARE_DEPLOY_ENV=live` | `SHOPWARE_ALLOW_LIVE_RESTORE=1` (then inner apply sets the same flag) |
 
 Staging / playground / dev need no extra live flag for backup recover (still
 need confirmation). Quarterly drill: restore onto staging, not live.
@@ -260,20 +283,21 @@ Disaster recovery from a backup artifact onto this host. Historically overlay
 
 1. Require `--artifact` (aliases `--stamp`, `--from`) and confirmation (`--i-understand-this-restores-this-host`
    or `BACKUP_CONFIRM_RESTORE=1`).
-2. If `SHOPWARE_DEPLOY_ENV=live`, refuse unless `BACKUP_ALLOW_LIVE_RESTORE=1`.
+2. If `SHOPWARE_DEPLOY_ENV=live`, refuse unless `SHOPWARE_ALLOW_LIVE_RESTORE=1`.
 3. Fetch the artifact:
    - `--artifact` directory path, or
-   - local `$BACKUP_TARGET/<shop>/<env>/<stamp>/`, or
-   - SSH `BACKUP_TARGET`: rsync into `<shop>/var/backup-work/restore-<stamp>`.
-4. Set `SYNC_ALLOW_LIVE_RESTORE=1` and apply via the **same restore module** as
+   - local `$BACKUP_TARGET/<shop>/<env>/<stamp>/` (`BACKUP_TARGET` default `local`), or
+   - SSH `BACKUP_TARGET`: rsync into `<shop>/var/backup-work/restore-<stamp>`
+     (`SHOPWARE_SSH_KEY` when set).
+4. Set `SHOPWARE_ALLOW_LIVE_RESTORE=1` and apply via the **same restore module** as
    `shopware sync apply` (`--data db` → existing import of `db.sql.gz` /
    `db.sql`; volumes from artifact `data/<item>/` then `volumes/<item>.tar.gz`).
 5. `--dry-run` prints the fetch + inner restore plan and does not overwrite DB
    or bind mounts.
 6. After a real restore, hint to rewrite sales-channel URLs if this is not a
-   same-host drill (rewrite itself is still refused on live).
+   same-host drill (rewrite itself is still skipped on live).
 
-Loads `.env`, `.env.prod`, `deploy/sync.env`, then `deploy/backup.env`.
+Same loader as every other shopware verb (`.env` / `.env.local` / `.env.prod`).
 Process-env `BACKUP_*` and shop identity keys win when non-empty.
 
 ## `shopware sync apply` (volumes + orchestration)
@@ -281,23 +305,22 @@ Process-env `BACKUP_*` and shop identity keys win when non-empty.
 Applies `--snapshot-dir` onto **this host**. `--from` is unused for local
 apply (kept for clap compatibility with `sync capture` / `sync pull`).
 
-1. Refuse a live consumer unless `SYNC_ALLOW_LIVE_RESTORE=1` (covers
+1. Refuse a live consumer unless `SHOPWARE_ALLOW_LIVE_RESTORE=1` (covers
    volume-only restore, not only db).
-2. If `SYNC_REWRITE_APP_URL` or `SYNC_REWRITE_URL_MAP` is set, refuse when
-   the consumer is live. Rewrite on live is impossible.
+2. If `APP_URL` is set and the consumer is live, skip rewrite (never applied
+   on live). Staging / playground / dev rewrite from `APP_URL`.
 3. Stop running compose services `web`, `worker`, `scheduler`.
 4. If `--data` includes db: existing import module (`db.sql.gz` then `db.sql`).
 5. If rewrite was requested **and** db was restored: `docker compose … run
    --rm --pull never --entrypoint php web bin/console
    fyrst:sales-channel:rewrite-urls …`. If db was skipped, rewrite is skipped.
-6. Restore selected bind-mount items into `SHOPWARE_DATA_ROOT` /
-   `SYNC_DATA_ROOT` / derived `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV`
+6. Restore selected bind-mount items into `SHOPWARE_DATA_ROOT` or derived
+   `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV`
    (`SHOPWARE_DATA_BASE` defaults to `/var/lib/shopware/data`). Prefer rsync
    from `data/<item>/`, else extract `volumes/<item>.tar.gz`, then `chown 82:82`.
    `--dry-run` prints rsync/extract/chown and does not copy.
 7. Start previously stopped app services.
-8. Non-fatal `cache:clear` when `IMAGE` is set; optional non-fatal
-   `SYNC_POST_RESTORE_CMD`; hints when rewrite was off.
+8. Non-fatal `cache:clear` when `IMAGE` is set; hints when rewrite was off.
 
 Passwords are never logged. Rewrite is not a Rust SQL rewriter.
 
@@ -309,8 +332,7 @@ into `--snapshot-dir/data/<item>/`. Default `--snapshot-dir` is
 `db,media,files,thumbnail,theme,sitemap`.
 
 This is **not** a dump command. fyrst-cli never runs
-`docker run … shopware-cli project dump` and never wraps
-`SYNC_DUMP_ENGINE=mysqldump`.
+`docker run … shopware-cli project dump` and never dumps.
 
 ```text
 fyrst-cli shopware sync capture [--from ALIAS] [--data LIST] [--snapshot-dir DIR] [--dry-run] [--skip-db] [--skip-volumes]
@@ -324,18 +346,17 @@ fyrst-cli shopware sync capture [--from ALIAS] [--data LIST] [--snapshot-dir DIR
 | `mysql_data` / `redis_data` | Refused (exit 1). |
 
 Local: rsync (or a tree copy if rsync is missing) from
-`$SYNC_DATA_ROOT` / `$SHOPWARE_DATA_ROOT` / derived
+`$SHOPWARE_DATA_ROOT` / derived
 `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/<item>`
 into `--snapshot-dir/data/<item>/`. If the bind-mount directory is missing,
 named-volume fallback `${COMPOSE_PROJECT_NAME}_<item>` via
-`SYNC_ARCHIVE_IMAGE` (default `alpine:3.20`) writes
-`--snapshot-dir/volumes/<item>.tar.gz`.
+`alpine:3.20` writes `--snapshot-dir/volumes/<item>.tar.gz`.
 
 Remote `--from <alias>`: SSH + rsync (or tar over SSH) from
-`SYNC_REMOTE_DATA_ROOT` / `SYNC_<ALIAS>_DATA_ROOT` / derived
-`$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SYNC_SOURCE_ENV`. Requires
-`SYNC_REMOTE_PATH` (or `SYNC_<ALIAS>_REMOTE_PATH`). Does **not** dump on the
-remote.
+`SHOPWARE_REMOTE_DATA_ROOT` or derived
+`$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/live`. Host/user/key from
+`SHOPWARE_SSH_*` (host defaults to the `--from` alias). Does **not** dump on
+the remote.
 
 Object storage (S3) is out of scope. Dump remains shopware-cli.
 
@@ -344,10 +365,10 @@ Object storage (S3) is out of scope. Dump remains shopware-cli.
 Overlay `do_sync` minus dump wrap. Run on the consumer (staging / playground /
 dev). Typical cron: `--from live --data all`.
 
-1. Live refuse (same as overlay `assert_not_live_restore`) unless
-   `SYNC_ALLOW_LIVE_RESTORE=1`. Rewrite-on-live is impossible even with that
-   flag (`SYNC_REWRITE_APP_URL` / `SYNC_REWRITE_URL_MAP` must be unset on live).
-2. SSH probe (`SYNC_SSH_*`; dry-run prints the probe and does not connect).
+1. Live refuse unless `SHOPWARE_ALLOW_LIVE_RESTORE=1`. Rewrite from `APP_URL`
+   is skipped on live.
+2. SSH probe (`SHOPWARE_SSH_*`; dry-run prints the probe and does not connect).
+   Host defaults to the `--from` alias.
 3. Stop `web` / `worker` / `scheduler` if running (dry-run prints the plan).
 4. **DB:** fyrst-cli **does not dump** and does not SSH a dump wrapper. If
    `--data` includes `db`, import `<snapshot-dir>/db.sql.gz` (then `db.sql`)
@@ -355,22 +376,21 @@ dev). Typical cron: `--from live --data all`.
    operator instructions to run `shopware-cli project dump` on the source and
    place `db.sql.gz` for import (`fyrst-cli shopware db import --file` is the
    same module). `--skip-db` skips this leg.
-5. Opt-in `fyrst:sales-channel:rewrite-urls` when rewrite env is set **and** a
-   dump was imported. Skipped when `--skip-db` / no dump imported.
-6. Volume leg: rsync `SYNC_REMOTE_DATA_ROOT/<item>/` → local
-   `$DATA_ROOT/<item>/` (tar/docker fallback if rsync cannot write), then
-   `chown 82:82`, matching `sync_bind_from_remote`. `--dry-run` prints rsync
-   without copying.
-7. Start previously stopped app services; non-fatal cache:clear /
-   `SYNC_POST_RESTORE_CMD` hints.
+5. `fyrst:sales-channel:rewrite-urls` when `APP_URL` is set **and** a dump
+   was imported on a non-live consumer. Skipped when `--skip-db` / no dump
+   imported / live.
+6. Volume leg: rsync `SHOPWARE_REMOTE_DATA_ROOT/<item>/` (or derived
+   `{data_base}/{shop_id}/live`) → local `$DATA_ROOT/<item>/` (tar/docker
+   fallback if rsync cannot write), then `chown 82:82`. `--dry-run` prints
+   rsync without copying.
+7. Start previously stopped app services; non-fatal cache:clear.
 
 `--from local` is documented as a capture+apply pipeline check (rsync
 through `--snapshot-dir`), not the cron path.
 
-SSH env (not clap): `SYNC_SSH_HOST` (default `--from` alias), `SYNC_SSH_USER`,
-`SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_PATH`, `SYNC_REMOTE_DATA_ROOT`,
-per-alias `SYNC_<ALIAS>_SSH_*` / `SYNC_<ALIAS>_DATA_ROOT`. Passwords are never
-logged.
+SSH env (not clap): `SHOPWARE_SSH_HOST` (default `--from` alias),
+`SHOPWARE_SSH_USER`, `SHOPWARE_SSH_KEY`, `SHOPWARE_REMOTE_DATA_ROOT`.
+Passwords are never logged.
 
 ## Exact `sync local` CLI
 
@@ -383,7 +403,7 @@ fyrst-cli shopware sync local [--from ALIAS] [--data LIST] [--remote-data-root P
 Pull live VPS upload trees into a **laptop `shopware-cli` project-dev**
 checkout. Historically overlay `deploy/sync-runtime-local.sh` (removed). This command
 **never** restores the database and **never** writes into local
-`SHOPWARE_DATA_ROOT` / `SYNC_DATA_ROOT` (those are VPS bind-mount roots).
+`SHOPWARE_DATA_ROOT` (that is the VPS bind-mount root).
 VPS→VPS including DB is `shopware sync pull`, not this command.
 
 Default `--from` is `live`. Default `--data` (when omitted) is
@@ -403,16 +423,14 @@ Path remap (remote `$REMOTE_DATA_ROOT` → local shopware-cli project tree):
 
 1. Resolve shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`).
    Require `public/` or `composer.json`.
-2. Load shop-root `.env` then `deploy/sync.env` if present (identity keys from
-   the process environment win when non-empty). Does not load `.env.prod`.
-3. Remote root: `--remote-data-root` / `SYNC_REMOTE_DATA_ROOT` /
-   per-alias `SYNC_<ALIAS>_DATA_ROOT`, else
-   `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SYNC_SOURCE_ENV` with
-   `SYNC_SOURCE_ENV` default `live` and `SHOPWARE_DATA_BASE` default
-   `/var/lib/shopware/data`. `SHOPWARE_SHOP_ID` is required unless an
+2. Same loader as every shopware verb: `.env`, `.env.local`, `.env.prod`
+   (identity keys from the process environment win when non-empty).
+3. Remote root: `--remote-data-root` / `SHOPWARE_REMOTE_DATA_ROOT`, else
+   `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/live` (`SHOPWARE_DATA_BASE` default
+   `/var/lib/shopware/data`). `SHOPWARE_SHOP_ID` is required unless an
    explicit remote root is set.
-4. SSH: BatchMode, no password prompts. Host/user/port/key from
-   `SYNC_SSH_*` / `SYNC_<ALIAS>_SSH_*` (host falls back to `--from`).
+4. SSH: BatchMode, no password prompts. Host/user/key from
+   `SHOPWARE_SSH_*` (host falls back to `--from`). Port is always `22`.
 5. `--data db` / `database` / `mysql` is refused (dump/import separately:
    `shopware-cli project dump` + `fyrst-cli shopware db import`).
    `--data all` is refused (on `sync pull` / `backup create`, `all` includes
@@ -429,39 +447,6 @@ Path remap (remote `$REMOTE_DATA_ROOT` → local shopware-cli project tree):
 
 Requires `rsync` and an OpenSSH `ssh` client.
 
-## `shopware sync pull` (implemented)
-
-Overlay `do_sync` minus dump wrap. Run on the consumer (staging / playground /
-dev). Typical cron: `--from live --data all`.
-
-1. Live refuse (same as overlay `assert_not_live_restore`) unless
-   `SYNC_ALLOW_LIVE_RESTORE=1`. Rewrite-on-live is impossible even with that
-   flag (`SYNC_REWRITE_APP_URL` / `SYNC_REWRITE_URL_MAP` must be unset on live).
-2. SSH probe (`SYNC_SSH_*`; dry-run prints the probe and does not connect).
-3. Stop `web` / `worker` / `scheduler` if running (dry-run prints the plan).
-4. **DB:** fyrst-cli **does not dump** and does not SSH a dump wrapper. If
-   `--data` includes `db`, import `<snapshot-dir>/db.sql.gz` (then `db.sql`)
-   with the existing import module. If no dump is present, exit 1 with
-   operator instructions to run `shopware-cli project dump` on the source and
-   place `db.sql.gz` for import (`fyrst-cli shopware db import --file` is the
-   same module). `--skip-db` skips this leg.
-5. Opt-in `fyrst:sales-channel:rewrite-urls` when rewrite env is set **and** a
-   dump was imported. Skipped when `--skip-db` / no dump imported.
-6. Volume leg: rsync `SYNC_REMOTE_DATA_ROOT/<item>/` → local
-   `$DATA_ROOT/<item>/` (tar/docker fallback if rsync cannot write), then
-   `chown 82:82`, matching `sync_bind_from_remote`. `--dry-run` prints rsync
-   without copying.
-7. Start previously stopped app services; non-fatal cache:clear /
-   `SYNC_POST_RESTORE_CMD` hints.
-
-`--from local` is documented as a capture+apply pipeline check (rsync
-through `--snapshot-dir`), not the cron path.
-
-SSH env (not clap): `SYNC_SSH_HOST` (default `--from` alias), `SYNC_SSH_USER`,
-`SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_PATH`, `SYNC_REMOTE_DATA_ROOT`,
-per-alias `SYNC_<ALIAS>_SSH_*` / `SYNC_<ALIAS>_DATA_ROOT`. Passwords are never
-logged.
-
 ## Exact backup CLI
 
 ```text
@@ -470,12 +455,12 @@ fyrst-cli shopware backup create [--data LIST] [--dry-run]
 
 Default `--data`: `db,media,files,thumbnail,theme,sitemap`.
 
-Required env: `BACKUP_TARGET` (local path, second disk, or SSH
-`user@host:/path` / `ssh://user@host:22/abs/path`). Also `BACKUP_KEEP_DAYS`
-(default 14, `0` = keep forever), `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`.
-Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`. Optional
-`BACKUP_DB_DUMP` = path to an already-made `db.sql.gz` (or `.sql`) to copy
-into the artifact. Overlay `deploy/backup.env` is loaded; process-env
+`BACKUP_TARGET` (local path, second disk, or SSH `user@host:/path` /
+`ssh://user@host:22/abs/path`; default `local` under the shop). Also
+`BACKUP_KEEP_DAYS` (default 14, `0` = keep forever). SSH targets reuse
+`SHOPWARE_SSH_*`. Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`.
+Optional `BACKUP_DB_DUMP` = path to an already-made `db.sql.gz` (or `.sql`)
+to copy into the artifact. Same loader as every shopware verb; process-env
 `BACKUP_*` values win when non-empty.
 
 Layout on `BACKUP_TARGET`:
@@ -497,17 +482,17 @@ Historically overlay `deploy/backup-runtime.sh backup` (removed). fyrst-cli
 **never** wraps `shopware-cli project dump` and never shells out to
 shopware-cli.
 
-1. Resolve shop root; load `.env`, `.env.prod`, `deploy/sync.env`,
-   `deploy/backup.env`. Require `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`,
-   `BACKUP_TARGET`.
+1. Resolve shop root; load `.env`, `.env.local`, `.env.prod`. Require
+   `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`. `BACKUP_TARGET` defaults to
+   `local`.
 2. Lock overlapping runs (`var/backup-runtime.lock` / flock).
 3. Copy selected bind-mount trees from
    `$SHOPWARE_DATA_ROOT/<item>/` (or derived
    `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV`) into
    `data/<item>/`. Missing bind-mounts fall back to a named-volume tar
-   (`${COMPOSE_PROJECT_NAME}_<item>`, `SYNC_ARCHIVE_IMAGE`, default
-   `alpine:3.20`). Local target writes the timestamped dir in place; SSH
-   target builds under `<shop>/var/backup-work/<stamp>` then rsyncs.
+   (`${COMPOSE_PROJECT_NAME}_<item>`, `alpine:3.20`). Local target writes the
+   timestamped dir in place; SSH target builds under
+   `<shop>/var/backup-work/<stamp>` then rsyncs (`SHOPWARE_SSH_KEY`).
 4. If `--data` includes `db`: **do not dump**. `--dry-run` prints
    “run shopware-cli project dump yourself”. Execute copies `BACKUP_DB_DUMP`
    into the artifact as `db.sql.gz` (or `db.sql`). Missing dump **fails**
@@ -540,14 +525,14 @@ command and does not wrap `shopware-cli`. Creating artifacts is
 `shopware backup create`.
 
 Resolves shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`),
-loads `.env` then `.env.prod` then `deploy/sync.env` then `deploy/backup.env`.
-Identity keys and `BACKUP_TARGET` / `BACKUP_KEEP_DAYS` / `BACKUP_SSH_KEY` /
-`BACKUP_SSH_PORT` from the process environment win when non-empty.
-Requires `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, and `BACKUP_TARGET`.
+loads `.env` then `.env.local` then `.env.prod`. Identity keys and
+`BACKUP_TARGET` / `BACKUP_KEEP_DAYS` / `SHOPWARE_SSH_KEY` from the process
+environment win when non-empty. Requires `SHOPWARE_SHOP_ID` and
+`SHOPWARE_DEPLOY_ENV`. `BACKUP_TARGET` defaults to `local`.
 
 1. Parse `BACKUP_TARGET` as a local path, `user@host:/path` / `host:/path`,
-   or `ssh://user@host:22/abs/path`. Missing `BACKUP_TARGET` fails with an
-   operator error (exit 1), not “not implemented”.
+   or `ssh://user@host:22/abs/path`. Unset `BACKUP_TARGET` uses `local`
+   under the shop (not “not implemented”).
 2. `BACKUP_KEEP_DAYS` default 14. `0` logs that all artifacts are kept and
    returns without listing or deleting.
 3. List names under the shop/env prefix. Delete those whose name matches
@@ -557,31 +542,29 @@ Requires `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, and `BACKUP_TARGET`.
    is kept.
 4. `--dry-run` prints `rm -rf` targets and does not delete.
 5. SSH targets use `ssh -o BatchMode=yes -o ConnectTimeout=15` (`-p` from
-   `BACKUP_SSH_PORT` or the `ssh://` URL; optional `-i BACKUP_SSH_KEY`) and
-   remote `rm -rf`.
+   the `ssh://` URL or `22`; optional `-i SHOPWARE_SSH_KEY`) and remote
+   `rm -rf`.
 
 Live is allowed (this is retention, not sync apply).
 
 ## Environment (not clap flags)
 
 This CLI reads shop identity and secrets from the environment / shop-root
-`.env`. Names match the historical overlay:
+`.env` / `.env.local` / `.env.prod`. New names only:
 
-| Area | Variables (non-exhaustive) |
+| Area | Variables |
 | --- | --- |
-| Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`, `COMPOSE_PROJECT_NAME`, `SYNC_ENV` |
+| Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`, `COMPOSE_PROJECT_NAME` |
 | Env init | `APP_SECRET` (optional `--generate-app-secret`; never logged), `IMAGE` |
-| Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SYNC_MYSQL_CLIENT_IMAGE`, `SYNC_SNAPSHOT_DIR`, `SYNC_ALLOW_LIVE_RESTORE` |
-| Restore volumes | `SHOPWARE_DATA_ROOT`, `SYNC_DATA_ROOT`, `SHOPWARE_DATA_BASE`, `SYNC_ARCHIVE_IMAGE` |
-| Opt-in rewrite / post-restore | `SYNC_REWRITE_APP_URL`, `SYNC_REWRITE_URL_MAP`, `SYNC_POST_RESTORE_CMD`, `IMAGE`, `APP_URL`, `SYNC_APP_URL` |
-| Dump (shopware-cli only) | Use `shopware-cli project dump`. fyrst-cli does not read overlay dump flags. There is no `deploy/lib/sync-dump.sh`. |
+| Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SHOPWARE_ALLOW_LIVE_RESTORE` |
+| Restore volumes | `SHOPWARE_DATA_ROOT`, `SHOPWARE_DATA_BASE` |
+| Rewrite | `APP_URL`, `IMAGE` |
+| Dump (shopware-cli only) | Use `shopware-cli project dump`. fyrst-cli does not dump. |
 | Release | `IMAGE`, `IMAGE_TAG` (release / `.env`; **ignored on rollback**), `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |
 | Rollback | `.previous-tag` is the only `IMAGE_TAG`; same optional env as release except `ROLLBACK_ON_SMOKE_FAIL` |
-| Sync capture volumes | `SYNC_DATA_ROOT`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_REMOTE_PATH`, `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_*` |
-| Sync local | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_<ALIAS>_SSH_*`, `SYNC_<ALIAS>_DATA_ROOT` |
-| Sync pull | `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_REMOTE_PATH`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_DATA_ROOT`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_SSH_*` / `SYNC_<ALIAS>_REMOTE_PATH` / `SYNC_<ALIAS>_DATA_ROOT` |
-| Sync rewrite | `SYNC_REWRITE_APP_URL`, `SYNC_REWRITE_URL_MAP`, `SYNC_APP_URL`, `SYNC_POST_RESTORE_CMD` |
-| Backup | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS` (default 14, `0` = forever), `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`, `BACKUP_DB_DUMP`, `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
+| SSH / remote live data | `SHOPWARE_SSH_HOST`, `SHOPWARE_SSH_USER`, `SHOPWARE_SSH_KEY`, `SHOPWARE_REMOTE_DATA_ROOT` |
+| Live gate | `SHOPWARE_ALLOW_LIVE_RESTORE` |
+| Backup | `BACKUP_TARGET` (default `local`), `BACKUP_KEEP_DAYS` (default 14, `0` = forever), `BACKUP_DB_DUMP`, `BACKUP_CONFIRM_RESTORE` |
 
 ## Ownership
 

@@ -5,7 +5,9 @@
 
 use super::env::{require_deploy_env, require_shop_id, resolve_compose_dir, ShopEnv};
 use super::error::Error;
-use super::target::{artifact_relpath, parse_backup_target, resolve_local_target_path, ssh_argv, BackupTarget};
+use super::target::{
+    artifact_relpath, parse_backup_target, resolve_local_target_path, ssh_argv, BackupTarget,
+};
 use super::volumes::command_exists;
 use crate::cli::BackupOpArgs;
 use std::collections::HashMap;
@@ -31,24 +33,20 @@ pub fn run_with_env(
 ) -> Result<(), Error> {
     let compose_dir = resolve_compose_dir(process_env, cwd)?;
     let compose_dir = fs::canonicalize(&compose_dir).unwrap_or(compose_dir);
-    let env = ShopEnv::load_backup(compose_dir.clone(), process_env)?;
+    let env = ShopEnv::load(compose_dir.clone(), process_env)?;
     let shop_id = require_shop_id(&env)?;
     let deploy_env = require_deploy_env(&env)?;
-    let raw_target = env.get("BACKUP_TARGET").unwrap_or("");
-    if raw_target.trim().is_empty() {
-        return Err(Error::fail(
-            "BACKUP_TARGET is required (local path, second disk, or user@host:/path). See deploy/backup.env.example.",
-        ));
-    }
-    let ssh_port = env.get("BACKUP_SSH_PORT").unwrap_or("22");
-    let mut target = parse_backup_target(raw_target, ssh_port)?;
+    let raw_target = env
+        .get("BACKUP_TARGET")
+        .unwrap_or(super::env::DEFAULT_BACKUP_TARGET);
+    let mut target = parse_backup_target(raw_target, "22")?;
     if let BackupTarget::Local { path } = &target {
         target = BackupTarget::Local {
             path: resolve_local_target_path(path, &compose_dir),
         };
     }
     let keep_days = parse_keep_days(env.get("BACKUP_KEEP_DAYS"))?;
-    let ssh_key = env.get("BACKUP_SSH_KEY").map(PathBuf::from);
+    let ssh_key = env.get("SHOPWARE_SSH_KEY").map(PathBuf::from);
     let now_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -59,7 +57,13 @@ pub fn run_with_env(
         raw_target,
         if args.dry_run { 1 } else { 0 },
     );
-    if args.data.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some() {
+    if args
+        .data
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
         println!("==> --data is ignored for prune (retention is stamp-based)");
     }
 
@@ -291,7 +295,7 @@ pub fn remote_sh(
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(Error::fail(format!(
-            "SSH to {dest} failed (BatchMode). Check BACKUP_TARGET / BACKUP_SSH_KEY. {err}"
+            "SSH to {dest} failed (BatchMode). Check BACKUP_TARGET / SHOPWARE_SSH_KEY. {err}"
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())

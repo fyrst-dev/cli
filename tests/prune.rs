@@ -67,6 +67,7 @@ const LEAK_KEYS: &[&str] = &[
     "SHOPWARE_DEPLOY_ENV",
     "BACKUP_TARGET",
     "BACKUP_KEEP_DAYS",
+    "SHOPWARE_SSH_KEY",
     "BACKUP_SSH_KEY",
     "BACKUP_SSH_PORT",
     "BACKUP_ALLOW_LIVE_RESTORE",
@@ -121,15 +122,14 @@ fn prune_help_lists_flags() {
 }
 
 #[test]
-fn missing_backup_target_fails_not_stub() {
+fn default_backup_target_is_local() {
     let shop = TempShop::new("missing");
     shop.write_min_shop();
     let out = prune(shop.path(), &[], None, None);
-    assert_eq!(out.status.code(), Some(1), "{}", combined(&out));
-    let err = stderr(&out);
-    assert!(err.contains("BACKUP_TARGET"), "{err}");
-    assert!(err.contains("ERROR:"), "{err}");
-    assert!(!err.contains("not implemented"), "{err}");
+    assert_eq!(out.status.code(), Some(0), "{}", combined(&out));
+    let text = combined(&out);
+    assert!(text.contains("target=local"), "{text}");
+    assert!(!text.contains("not implemented"), "{text}");
 }
 
 #[test]
