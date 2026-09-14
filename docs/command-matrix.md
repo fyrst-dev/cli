@@ -1,8 +1,14 @@
 # Command matrix
 
-Source of truth for script behaviour is the Flex overlay in
+Operator commands and overlay **filenames** are unchanged. The Flex overlay in
 [fyrst-dev/recipes](https://github.com/fyrst-dev/recipes)
-(`fyrst/shopware-cd/1.0/root/deploy/`). This CLI mirrors the public interface.
+(`fyrst/shopware-cd/1.0/root/deploy/`) still ships the six `deploy/*.sh`
+names so CI and cron keep working (`bash ./deploy/vps-release.sh`,
+`sync-runtime.sh snapshot`, …). Those wrappers are stubs around a dispatcher;
+they do not implement pipeline logic. This CLI is the implementation.
+
+There is no `deploy/lib/sync-dump.sh`. **Dump is `shopware-cli project dump`
+only.** fyrst-cli does not dump, wrap dump, or shell out to shopware-cli.
 
 Delegated tools:
 
@@ -15,6 +21,10 @@ Delegated tools:
 | Opt-in URL rewrite after restore | `bin/console fyrst:sales-channel:rewrite-urls` via compose `web` |
 
 ## Map
+
+Overlay column = filename-stable stub (dispatcher entry). Verb aliases
+(`snapshot` / `restore` / `sync`, `backup` / `restore`) stay on the stub so
+existing cron keeps working.
 
 | Overlay script | CLI | Nested verbs | Flags | Status |
 | --- | --- | --- | --- | --- |
@@ -322,8 +332,8 @@ named-volume fallback `${COMPOSE_PROJECT_NAME}_<item>` via
 Remote `--from <alias>`: SSH + rsync (or tar over SSH) from
 `SYNC_REMOTE_DATA_ROOT` / `SYNC_<ALIAS>_DATA_ROOT` / derived
 `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SYNC_SOURCE_ENV`. Requires
-`SYNC_REMOTE_PATH` (or `SYNC_<ALIAS>_REMOTE_PATH`). Does **not** SSH-run
-the overlay snapshot script (that would dump). Does not dump on the remote.
+`SYNC_REMOTE_PATH` (or `SYNC_<ALIAS>_REMOTE_PATH`). Does **not** dump on the
+remote.
 
 Object storage (S3) is out of scope. Dump remains shopware-cli.
 
@@ -481,9 +491,9 @@ $BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/YYYYMMDDTHHMMSSZ/
 Off-host backup of runtime artifacts. Sync is **not** a backup. Live
 (`SHOPWARE_DEPLOY_ENV=live`) is allowed and expected (cron on live).
 
-Divergence from overlay `backup-runtime.sh`: the overlay execs
-`sync-runtime.sh snapshot` (which dumps). fyrst-cli **never** wraps
-`shopware-cli project dump` and never shells out to shopware-cli.
+The Flex `deploy/backup-runtime.sh` stub dispatches to this verb. fyrst-cli
+**never** wraps `shopware-cli project dump` and never shells out to
+shopware-cli.
 
 1. Resolve shop root; load `.env`, `.env.prod`, `deploy/sync.env`,
    `deploy/backup.env`. Require `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`,
@@ -562,7 +572,7 @@ shop-root `.env`. Names match the overlay:
 | Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SYNC_MYSQL_CLIENT_IMAGE`, `SYNC_SNAPSHOT_DIR`, `SYNC_ALLOW_LIVE_RESTORE` |
 | Restore volumes | `SHOPWARE_DATA_ROOT`, `SYNC_DATA_ROOT`, `SHOPWARE_DATA_BASE`, `SYNC_ARCHIVE_IMAGE` |
 | Opt-in rewrite / post-restore | `SYNC_REWRITE_APP_URL`, `SYNC_REWRITE_URL_MAP`, `SYNC_POST_RESTORE_CMD`, `IMAGE`, `APP_URL`, `SYNC_APP_URL` |
-| Dump (shopware-cli / overlay only) | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `SYNC_SHOPWARE_CLI_IMAGE`, `SYNC_DUMP_ENGINE`, `SYNC_DUMP_QUICK`, `SYNC_DUMP_CLEAN`, `SYNC_DUMP_ANONYMIZE` |
+| Dump (shopware-cli only) | Use `shopware-cli project dump`. fyrst-cli does not read overlay dump flags. There is no `deploy/lib/sync-dump.sh`. |
 | Release | `IMAGE`, `IMAGE_TAG` (release / `.env`; **ignored on rollback**), `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |
 | Rollback | `.previous-tag` is the only `IMAGE_TAG`; same optional env as release except `ROLLBACK_ON_SMOKE_FAIL` |
 | Sync capture volumes | `SYNC_DATA_ROOT`, `SYNC_REMOTE_DATA_ROOT`, `SYNC_SOURCE_ENV`, `SYNC_REMOTE_PATH`, `SYNC_SSH_HOST`, `SYNC_SSH_USER`, `SYNC_SSH_PORT`, `SYNC_SSH_KEY`, `SYNC_ARCHIVE_IMAGE`, per-alias `SYNC_<ALIAS>_*` |
@@ -573,9 +583,9 @@ shop-root `.env`. Names match the overlay:
 
 ## Ownership
 
-The six overlay scripts are implemented in-process in this CLI. Dump remains
+The six overlay scripts are filename-stable stubs around a recipe dispatcher;
+pipeline logic is implemented in-process in this CLI. Dump remains
 `shopware-cli project dump` forever — fyrst-cli does not dump, wrap dump, or
 shell out to shopware-cli. Recipe and `shopware-cd` product code stay out of
-this repo. Recipe bash is not switched to `fyrst-cli` in this change. Do not
-reimplement rewrite in SQL; `sync apply` calls compose `web` console.
-Rollback reuses the release compose/rollout helper.
+this repo. Do not reimplement rewrite in SQL; `sync apply` calls compose `web`
+console. Rollback reuses the release compose/rollout helper.
