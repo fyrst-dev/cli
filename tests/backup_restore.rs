@@ -126,7 +126,7 @@ fn combined(out: &Output) -> String {
 }
 
 #[test]
-fn missing_artifact_exits_1() {
+fn missing_artifact_flag_exits_1() {
     let shop = TempShop::new("nofrom");
     shop.write_shop("staging");
     let out = backup_restore(
