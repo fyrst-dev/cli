@@ -87,6 +87,24 @@ fyrst-cli shopware backup recover          # recover this host from an artifact
 
 `fyrst-cli shopware --help` lists the same tree.
 
+### Overlay wrappers
+
+The Flex overlay still ships these `deploy/*.sh` names so CI and cron stay
+unchanged. The files are stubs around a dispatcher; **filenames are
+unchanged**. Implementation is this CLI. **Dump stays `shopware-cli project
+dump`.** There is no `deploy/lib/sync-dump.sh`.
+
+| Overlay stub | fyrst-cli |
+| --- | --- |
+| `deploy/init-env.sh` | `fyrst-cli shopware env init` |
+| `deploy/vps-release.sh` | `fyrst-cli shopware deploy release` |
+| `deploy/vps-rollback.sh` | `fyrst-cli shopware deploy rollback` |
+| `deploy/sync-runtime.sh snapshot\|restore\|sync` | `fyrst-cli shopware sync capture\|apply\|pull` |
+| `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync local` (`--data all` refused) |
+| `deploy/backup-runtime.sh backup\|prune\|restore` | `fyrst-cli shopware backup create\|prune\|recover` |
+
+Flags and env: [docs/command-matrix.md](docs/command-matrix.md).
+
 ### Dump (shopware-cli)
 
 From a shop checkout with a running Compose `mysql` (or `DATABASE_URL`):
