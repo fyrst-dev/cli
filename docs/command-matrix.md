@@ -1,14 +1,16 @@
 # Command matrix
 
-Operator commands and overlay **filenames** are unchanged. The Flex overlay in
-[fyrst-dev/recipes](https://github.com/fyrst-dev/recipes)
-(`fyrst/shopware-cd/1.0/root/deploy/`) still ships the six `deploy/*.sh`
-names so CI and cron keep working (`bash ./deploy/vps-release.sh`,
-`sync-runtime.sh snapshot`, …). Those wrappers are stubs around a dispatcher;
-they do not implement pipeline logic. This CLI is the implementation.
+Operator path is **fyrst-cli only**. Install `fyrst-cli` on each VPS. The Flex
+overlay in [fyrst-dev/recipes](https://github.com/fyrst-dev/recipes)
+(`fyrst/shopware-cd/1.0/root/deploy/`) no longer ships the six `deploy/*.sh`
+wrappers or a dispatcher. CI and cron call `fyrst-cli shopware …` — not
+`bash ./deploy/vps-release.sh` or `sync-runtime.sh snapshot`.
 
-There is no `deploy/lib/sync-dump.sh`. **Dump is `shopware-cli project dump`
-only.** fyrst-cli does not dump, wrap dump, or shell out to shopware-cli.
+Overlay script names in the map are **historical**. Overlay verbs
+(`snapshot` / `restore` / `sync`, `backup` / `restore`) are retired.
+
+**Dump is `shopware-cli project dump` only.** fyrst-cli does not dump, wrap
+dump, or shell out to shopware-cli. There is no `deploy/lib/sync-dump.sh`.
 
 Delegated tools:
 
@@ -22,11 +24,10 @@ Delegated tools:
 
 ## Map
 
-Overlay column = filename-stable stub (dispatcher entry). Verb aliases
-(`snapshot` / `restore` / `sync`, `backup` / `restore`) stay on the stub so
-existing cron keeps working.
+Historical overlay column = removed Flex `deploy/*.sh` names. Do not invoke
+those scripts. Use the CLI column.
 
-| Overlay script | CLI | Nested verbs | Flags | Status |
+| Historical overlay (removed) | CLI | Nested verbs | Flags | Status |
 | --- | --- | --- | --- | --- |
 | `deploy/init-env.sh` | `fyrst-cli shopware env init` | `init` | `--shop-id`, `--env`, `--image`, `--vps`, `--generate-app-secret`, `--dry-run` | **implemented** |
 | `deploy/vps-release.sh` | `fyrst-cli shopware deploy release` | `release` | `--dry-run`, `--skip-pull` | **implemented** |
@@ -137,9 +138,10 @@ volumes (`media`, `files`, `thumbnail`, `theme`, `sitemap`) restore from
 
 ## `shopware env init` (implemented)
 
-Finish shop-root `.env` after `shopware-cli project create` + Flex. Maps to
-recipes `deploy/init-env.sh`. Does **not** overwrite the whole file, invent
-`MYSQL_*` passwords, or set `APP_URL`. This is **not** a dump command.
+Finish shop-root `.env` after `shopware-cli project create` + Flex. Historically
+mapped to overlay `deploy/init-env.sh` (removed). Does **not** overwrite the
+whole file, invent `MYSQL_*` passwords, or set `APP_URL`. This is **not** a
+dump command.
 
 Resolves shop root (`COMPOSE_DIR` if set, else walk from cwd for `.env` or
 `.env.example` + `deploy/`). `.env` is `KEY=VALUE` (quotes stripped, **no
@@ -253,8 +255,8 @@ need confirmation). Quarterly drill: restore onto staging, not live.
 
 ## `shopware backup recover` (implemented)
 
-Disaster recovery from a backup artifact onto this host. Overlay
-`deploy/backup-runtime.sh restore`. fyrst-cli does **not** dump.
+Disaster recovery from a backup artifact onto this host. Historically overlay
+`deploy/backup-runtime.sh restore` (removed). fyrst-cli does **not** dump.
 
 1. Require `--artifact` (aliases `--stamp`, `--from`) and confirmation (`--i-understand-this-restores-this-host`
    or `BACKUP_CONFIRM_RESTORE=1`).
@@ -379,7 +381,7 @@ fyrst-cli shopware sync local [--from ALIAS] [--data LIST] [--remote-data-root P
 ## `shopware sync local` (implemented)
 
 Pull live VPS upload trees into a **laptop `shopware-cli` project-dev**
-checkout. Matches recipes `deploy/sync-runtime-local.sh`. This command
+checkout. Historically overlay `deploy/sync-runtime-local.sh` (removed). This command
 **never** restores the database and **never** writes into local
 `SHOPWARE_DATA_ROOT` / `SYNC_DATA_ROOT` (those are VPS bind-mount roots).
 VPS→VPS including DB is `shopware sync pull`, not this command.
@@ -491,7 +493,7 @@ $BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/YYYYMMDDTHHMMSSZ/
 Off-host backup of runtime artifacts. Sync is **not** a backup. Live
 (`SHOPWARE_DEPLOY_ENV=live`) is allowed and expected (cron on live).
 
-The Flex `deploy/backup-runtime.sh` stub dispatches to this verb. fyrst-cli
+Historically overlay `deploy/backup-runtime.sh backup` (removed). fyrst-cli
 **never** wraps `shopware-cli project dump` and never shells out to
 shopware-cli.
 
@@ -562,8 +564,8 @@ Live is allowed (this is retention, not sync apply).
 
 ## Environment (not clap flags)
 
-Scripts and this CLI read shop identity and secrets from the environment /
-shop-root `.env`. Names match the overlay:
+This CLI reads shop identity and secrets from the environment / shop-root
+`.env`. Names match the historical overlay:
 
 | Area | Variables (non-exhaustive) |
 | --- | --- |
@@ -583,8 +585,8 @@ shop-root `.env`. Names match the overlay:
 
 ## Ownership
 
-The six overlay scripts are filename-stable stubs around a recipe dispatcher;
-pipeline logic is implemented in-process in this CLI. Dump remains
+The six overlay scripts and the recipe dispatcher are **removed**. Operators
+and CI call `fyrst-cli shopware …` only. Dump remains
 `shopware-cli project dump` forever — fyrst-cli does not dump, wrap dump, or
 shell out to shopware-cli. Recipe and `shopware-cd` product code stay out of
 this repo. Do not reimplement rewrite in SQL; `sync apply` calls compose `web`
