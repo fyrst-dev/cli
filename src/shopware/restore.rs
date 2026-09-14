@@ -1,6 +1,5 @@
 //! `fyrst-cli shopware sync apply` — DB import plus bind-mount volumes and
-//! post-apply orchestration (stop/start, opt-in rewrite, cache:clear hint,
-//! `SYNC_POST_RESTORE_CMD`).
+//! post-apply orchestration (stop/start, APP_URL rewrite, cache:clear hint).
 //!
 //! Database import is the same module as `shopware db import`. Rewrite is
 //! `bin/console fyrst:sales-channel:rewrite-urls` via compose `web`, not SQL.
@@ -17,7 +16,8 @@ use super::mysql::{
     collect_env_secrets, compose_argv, find_snapshot_dump, log_contains_secret, parse_database_url,
 };
 use super::rewrite::{
-    assert_not_live_rewrite, compose_rewrite_args, rewrite_log_line, rewrite_requested,
+    compose_rewrite_args, rewrite_log_line, rewrite_requested, should_rewrite, skip_live_log,
+    skip_without_db_log,
 };
 use super::volumes::{archive_image, execute_bind_restore, plan_bind_restore, VolumeRestore};
 use crate::cli::SyncOpArgs;
@@ -31,6 +31,7 @@ use std::process::{Command, Stdio};
 pub enum RewriteAction {
     None,
     SkipNoDb,
+    SkipLive,
     Run {
         docker_args: Vec<String>,
         log_line: String,
@@ -42,7 +43,6 @@ pub struct RestorePlan {
     pub compose_files: Vec<String>,
     pub shop_id: String,
     pub deploy_env: Option<String>,
-    pub sync_env: Option<String>,
     pub snapshot_dir: PathBuf,
     pub data_root: Option<PathBuf>,
     pub selection: DataSelection,
@@ -55,7 +55,6 @@ pub struct RestorePlan {
     pub archive_image: String,
     pub image: Option<String>,
     pub app_url: Option<String>,
-    post_restore_cmd: Option<String>,
     secrets: Vec<String>,
 }
 
@@ -71,7 +70,6 @@ impl fmt::Debug for RestorePlan {
             .field("dry_run", &self.dry_run)
             .field("rewrite", &self.rewrite)
             .field("volumes", &self.volumes)
-            .field("has_post_restore_cmd", &self.post_restore_cmd.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -128,10 +126,8 @@ pub fn plan_with_env(
 
     let signals = LiveSignals::from_shop(env);
     let live_warning = assert_not_live(&signals, LivePolicy::SyncRestore)?;
-    let rewrite_opt_in = rewrite_requested(env);
-    if rewrite_opt_in {
-        assert_not_live_rewrite(&signals)?;
-    }
+    let rewrite_opt_in = should_rewrite(env, &signals);
+    let rewrite_url_set = rewrite_requested(env);
 
     if !dry_run && !snapshot_dir.is_dir() {
         return Err(Error::fail(format!(
@@ -159,7 +155,9 @@ pub fn plan_with_env(
         None
     };
 
-    let rewrite = if !rewrite_opt_in {
+    let rewrite = if rewrite_url_set && signals.is_live() {
+        RewriteAction::SkipLive
+    } else if !rewrite_opt_in {
         RewriteAction::None
     } else if !selection.want_db {
         RewriteAction::SkipNoDb
@@ -186,7 +184,6 @@ pub fn plan_with_env(
         compose_files,
         shop_id,
         deploy_env: env.get("SHOPWARE_DEPLOY_ENV").map(str::to_string),
-        sync_env: env.get("SYNC_ENV").map(str::to_string),
         snapshot_dir,
         data_root,
         selection,
@@ -198,11 +195,7 @@ pub fn plan_with_env(
         volumes,
         archive_image: archive_image(env),
         image: env.get("IMAGE").map(str::to_string),
-        app_url: env
-            .get("SYNC_APP_URL")
-            .or_else(|| env.get("APP_URL"))
-            .map(str::to_string),
-        post_restore_cmd: env.get("SYNC_POST_RESTORE_CMD").map(str::to_string),
+        app_url: env.get("APP_URL").map(str::to_string),
         secrets,
     })
 }
@@ -234,10 +227,11 @@ pub fn execute(plan: &RestorePlan) -> Result<(), Error> {
 
     match &plan.rewrite {
         RewriteAction::None => {}
+        RewriteAction::SkipLive => {
+            println!("==> {}", skip_live_log());
+        }
         RewriteAction::SkipNoDb => {
-            println!(
-                "==> SYNC_REWRITE_APP_URL / SYNC_REWRITE_URL_MAP set but db was skipped — not rewriting sales_channel_domain"
-            );
+            println!("==> {}", skip_without_db_log());
         }
         RewriteAction::Run {
             docker_args,
@@ -277,13 +271,13 @@ pub fn execute(plan: &RestorePlan) -> Result<(), Error> {
     )?;
     post_restore_hints(plan);
     println!(
-        "==> Restore finished into {} data_root={} (SYNC_ENV={})",
+        "==> Restore finished into {} data_root={} (SHOPWARE_DEPLOY_ENV={})",
         plan.compose_dir.display(),
         plan.data_root
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "unset".into()),
-        plan.sync_env.as_deref().unwrap_or("unset"),
+        plan.deploy_env.as_deref().unwrap_or("unset"),
     );
     Ok(())
 }
@@ -443,36 +437,30 @@ fn compose_up(
 fn post_restore_hints(plan: &RestorePlan) {
     if plan.rewrite_requested {
         println!(
-            "==> Sales-channel domains: opt-in rewrite was requested (see SYNC_REWRITE_*). Payment/shipping webhooks may still need manual review."
+            "==> Sales-channel domains: rewrite used APP_URL. Payment/shipping webhooks may still need manual review."
         );
+    } else if matches!(plan.rewrite, RewriteAction::SkipLive) {
+        println!("==> {}", skip_live_log());
     } else {
         println!(
-            "==> Sales-channel domains were not rewritten (default). Set SYNC_REWRITE_APP_URL=https://staging.example.com (or SYNC_REWRITE_URL_MAP) on a non-live consumer to rewrite sales_channel_domain after restore."
+            "==> Sales-channel domains were not rewritten. Set APP_URL on a non-live consumer to rewrite sales_channel_domain after restore."
         );
         if let Some(target) = &plan.app_url {
             if !plan.log_contains_secret(target) {
                 println!(
-                    "==> This shop APP_URL / SYNC_APP_URL={target} — destination storefront URL if you rewrite manually."
+                    "==> This shop APP_URL={target} — destination storefront URL if you rewrite manually."
                 );
             }
         }
     }
     if plan.dry_run {
-        println!(
-            "==> DRY-RUN would try cache:clear (non-fatal) and optional SYNC_POST_RESTORE_CMD"
-        );
+        println!("==> DRY-RUN would try cache:clear (non-fatal)");
         return;
     }
     if plan.image.is_some() {
         println!("==> Trying cache:clear (non-fatal if the image/console is unavailable)");
         if cache_clear(&plan.compose_dir, &plan.compose_files).is_err() {
             println!("==> cache:clear skipped or failed — not fatal");
-        }
-    }
-    if let Some(cmd) = &plan.post_restore_cmd {
-        println!("==> Running SYNC_POST_RESTORE_CMD (non-fatal)");
-        if !run_post_restore_cmd(cmd) {
-            println!("==> SYNC_POST_RESTORE_CMD failed — not fatal");
         }
     }
 }
@@ -500,14 +488,6 @@ fn cache_clear(compose_dir: &Path, files: &[String]) -> Result<(), Error> {
     } else {
         Err(Error::fail("cache:clear failed"))
     }
-}
-
-fn run_post_restore_cmd(cmd: &str) -> bool {
-    Command::new("bash")
-        .args(["-lc", cmd])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -605,7 +585,10 @@ mod tests {
         let err = import::plan_with_env(&env, shop.path(), &file, true, LivePolicy::SyncRestore)
             .unwrap_err();
         assert!(err.to_string().contains("live"), "{err}");
-        assert!(err.to_string().contains("SYNC_ALLOW_LIVE_RESTORE"), "{err}");
+        assert!(
+            err.to_string().contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -648,14 +631,17 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("live"), "{err}");
-        assert!(err.to_string().contains("SYNC_ALLOW_LIVE_RESTORE"), "{err}");
+        assert!(
+            err.to_string().contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
+            "{err}"
+        );
     }
 
     #[test]
     fn rewrite_skipped_when_skip_db() {
         let shop = TempShop::new("rewskip");
         shop.write_env(
-            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=staging\nSHOPWARE_DATA_ROOT=/tmp/data\nSYNC_REWRITE_APP_URL=https://staging.example.com\nMYSQL_PASSWORD=p\n",
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=staging\nSHOPWARE_DATA_ROOT=/tmp/data\nAPP_URL=https://staging.example.com\nMYSQL_PASSWORD=p\n",
         );
         shop.write_compose_mysql();
         shop.write_media_snapshot();
@@ -671,32 +657,24 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_refused_on_live_even_with_allow() {
+    fn rewrite_skipped_on_live_even_with_allow() {
         let shop = TempShop::new("rewlive");
         shop.write_env(
-            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=live\nSHOPWARE_DATA_ROOT=/tmp/data\nSYNC_ALLOW_LIVE_RESTORE=1\nSYNC_REWRITE_APP_URL=https://staging.example.com\nMYSQL_PASSWORD=p\n",
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=live\nSHOPWARE_DATA_ROOT=/tmp/data\nSHOPWARE_ALLOW_LIVE_RESTORE=1\nAPP_URL=https://shop.example.com\nMYSQL_PASSWORD=p\n",
         );
         shop.write_compose_mysql();
         shop.write_media_snapshot();
         shop.write_dump();
-        let err = plan(&args("db", true, false), &process(shop.path()), shop.path()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Refusing sales-channel domain rewrite on a live host"),
-            "{err}"
-        );
-        assert!(
-            err.to_string()
-                .contains("SYNC_ALLOW_LIVE_RESTORE=1 does not bypass"),
-            "{err}"
-        );
+        let plan = plan(&args("db", true, false), &process(shop.path()), shop.path()).unwrap();
+        assert!(matches!(plan.rewrite, RewriteAction::SkipLive));
+        assert!(!plan.rewrite_requested);
     }
 
     #[test]
     fn rewrite_run_is_compose_console_when_db_restored() {
         let shop = TempShop::new("rewrun");
         shop.write_env(
-            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=staging\nSYNC_ENV=staging\nSYNC_REWRITE_APP_URL=https://staging.example.com\nMYSQL_USER=u\nMYSQL_PASSWORD=s3cret-value\n",
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=staging\nAPP_URL=https://staging.example.com\nMYSQL_USER=u\nMYSQL_PASSWORD=s3cret-value\n",
         );
         shop.write_compose_mysql();
         shop.write_dump();

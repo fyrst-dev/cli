@@ -158,22 +158,20 @@ pub fn post_restore_hints(
 ) {
     if rewrite_requested {
         println!(
-            "==> Sales-channel domains: opt-in rewrite was requested (see SYNC_REWRITE_*). Payment/shipping webhooks may still need manual review."
+            "==> Sales-channel domains: rewrite used APP_URL. Payment/shipping webhooks may still need manual review."
         );
     } else {
         println!(
-            "==> Sales-channel domains were not rewritten (default). Set SYNC_REWRITE_APP_URL=https://staging.example.com (or SYNC_REWRITE_URL_MAP) on a non-live consumer to rewrite sales_channel_domain after restore."
+            "==> Sales-channel domains were not rewritten. Set APP_URL on a non-live consumer to rewrite sales_channel_domain after restore."
         );
-        if let Some(target) = env.get("SYNC_APP_URL").or_else(|| env.get("APP_URL")) {
+        if let Some(target) = env.get("APP_URL") {
             println!(
-                "==> This shop APP_URL / SYNC_APP_URL={target} — destination storefront URL if you rewrite manually."
+                "==> This shop APP_URL={target} — destination storefront URL if you rewrite manually."
             );
         }
     }
     if dry_run {
-        println!(
-            "==> DRY-RUN would try cache:clear (non-fatal) and optional SYNC_POST_RESTORE_CMD"
-        );
+        println!("==> DRY-RUN would try cache:clear (non-fatal)");
         return;
     }
     if env.get("IMAGE").is_some() && !files.is_empty() {
@@ -200,18 +198,6 @@ pub fn post_restore_hints(
             }
         } else {
             println!("==> cache:clear skipped or failed — not fatal");
-        }
-    }
-    if let Some(cmd) = env.get("SYNC_POST_RESTORE_CMD") {
-        println!("==> Running SYNC_POST_RESTORE_CMD (non-fatal)");
-        let ok = Command::new("bash")
-            .args(["-lc", cmd])
-            .current_dir(compose_dir)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !ok {
-            println!("==> SYNC_POST_RESTORE_CMD failed — not fatal");
         }
     }
 }

@@ -83,6 +83,11 @@ const LEAK_KEYS: &[&str] = &[
     "MYSQL_DATABASE",
     "MYSQL_ROOT_PASSWORD",
     "DATABASE_URL",
+    "SHOPWARE_ALLOW_LIVE_RESTORE",
+    "SHOPWARE_SSH_HOST",
+    "SHOPWARE_SSH_USER",
+    "SHOPWARE_SSH_KEY",
+    "APP_URL",
     "SYNC_MYSQL_CLIENT_IMAGE",
     "SYNC_SNAPSHOT_DIR",
     "SYNC_ALLOW_LIVE_RESTORE",
@@ -178,11 +183,11 @@ fn live_refuses_without_backup_allow() {
             art.to_str().unwrap(),
             "--i-understand-this-restores-this-host",
         ],
-        &[("SYNC_ALLOW_LIVE_RESTORE", "1")],
+        &[],
     );
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
     assert!(
-        stderr(&out).contains("BACKUP_ALLOW_LIVE_RESTORE"),
+        stderr(&out).contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
         "{}",
         stderr(&out)
     );
@@ -205,7 +210,7 @@ fn live_allow_dry_run_warns_and_sets_inner_flag() {
             art.to_str().unwrap(),
             "--i-understand-this-restores-this-host",
         ],
-        &[("BACKUP_ALLOW_LIVE_RESTORE", "1")],
+        &[("SHOPWARE_ALLOW_LIVE_RESTORE", "1")],
     );
     assert_eq!(
         out.status.code(),
@@ -217,7 +222,7 @@ fn live_allow_dry_run_warns_and_sets_inner_flag() {
     assert!(stderr(&out).contains("WARNING:"), "{}", stderr(&out));
     assert!(stdout(&out).contains("DRY-RUN"), "{}", stdout(&out));
     assert!(
-        stdout(&out).contains("SYNC_ALLOW_LIVE_RESTORE"),
+        stdout(&out).contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
         "{}",
         stdout(&out)
     );
@@ -401,7 +406,7 @@ fn volume_execute_copies_from_artifact_layout() {
 }
 
 #[test]
-fn missing_backup_target_for_stamp() {
+fn default_backup_target_looks_under_local() {
     let shop = TempShop::new("notarget");
     shop.write_shop("staging");
     let out = backup_restore(
@@ -415,7 +420,9 @@ fn missing_backup_target_for_stamp() {
         &[],
     );
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
-    assert!(stderr(&out).contains("BACKUP_TARGET"), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("Artifact not found"), "{err}");
+    assert!(err.contains("local/acme/staging/20260912T020000Z"), "{err}");
 }
 
 #[test]

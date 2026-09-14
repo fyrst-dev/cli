@@ -28,10 +28,10 @@ sync capture copies bind-mount trees for sync (not a retained backup).
 sync apply loads a workdir onto this host; backup recover is off-host DR.
 
 Live policy (refuse a live consumer unless):
-  db import         --allow-live or SYNC_ALLOW_LIVE_RESTORE=1
-  sync apply        SYNC_ALLOW_LIVE_RESTORE=1 only
-  sync pull         SYNC_ALLOW_LIVE_RESTORE=1 only
-  backup recover    confirm flag + BACKUP_ALLOW_LIVE_RESTORE=1
+  db import         --allow-live or SHOPWARE_ALLOW_LIVE_RESTORE=1
+  sync apply        SHOPWARE_ALLOW_LIVE_RESTORE=1 only
+  sync pull         SHOPWARE_ALLOW_LIVE_RESTORE=1 only
+  backup recover    confirm flag + SHOPWARE_ALLOW_LIVE_RESTORE=1
                     (--i-understand-this-restores-this-host or BACKUP_CONFIRM_RESTORE=1)
 
 Dump = shopware-cli project dump only (fyrst-cli does not dump).
@@ -118,7 +118,7 @@ BACKUP_TARGET; it is allowed on live. \
 (BACKUP_KEEP_DAYS, default 14, 0 = keep forever). \
 `backup recover` fetches an artifact (`--artifact` / `--stamp`, alias `--from`) and applies it onto this host. It is not \
 live→staging sync. Confirmation is required (`--i-understand-this-restores-this-host` \
-or BACKUP_CONFIRM_RESTORE=1). Live needs BACKUP_ALLOW_LIVE_RESTORE=1.",
+or BACKUP_CONFIRM_RESTORE=1). Live needs SHOPWARE_ALLOW_LIVE_RESTORE=1.",
     after_help = SHOPWARE_COMMAND_TREE
 )]
 pub struct ShopwareArgs {
@@ -254,7 +254,7 @@ pub struct DbImportArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Allow importing onto a live host (or set SYNC_ALLOW_LIVE_RESTORE=1)
+    /// Allow importing onto a live host (or set SHOPWARE_ALLOW_LIVE_RESTORE=1)
     #[arg(long = "allow-live")]
     pub allow_live: bool,
 }

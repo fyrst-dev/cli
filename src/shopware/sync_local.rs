@@ -1,12 +1,12 @@
 //! `fyrst-cli shopware sync local` — VPS → local shopware-cli project-dev rsync.
 //!
-//! Matches recipes `deploy/sync-runtime-local.sh` (read-only). Never copies
-//! the database. Local destinations are project-tree paths (`./public/media/`,
-//! `./files/`, …), never `SHOPWARE_DATA_ROOT` / `SYNC_DATA_ROOT`.
+//! Never copies the database. Local destinations are project-tree paths
+//! (`./public/media/`, `./files/`, …), never `SHOPWARE_DATA_ROOT`.
 
-use super::env::{resolve_compose_dir, ShopEnv};
+use super::env::{remote_data_root, require_shop_id, resolve_compose_dir, ShopEnv};
 use super::error::Error;
 use super::live::shop_basename;
+use super::ssh::{resolve_ssh_source, ssh_argv_vec};
 use crate::cli::SyncLocalArgs;
 use std::collections::HashMap;
 use std::fs;
@@ -15,8 +15,6 @@ use std::process::{Command, Stdio};
 
 pub const DEFAULT_FROM: &str = "live";
 pub const DEFAULT_SYNC_LOCAL_DATA: &str = "media,files,thumbnail,theme,sitemap";
-pub const DEFAULT_DATA_BASE: &str = "/var/lib/shopware/data";
-pub const DEFAULT_SOURCE_ENV: &str = "live";
 pub const CACHE_CLEAR_REMINDER: &str = "shopware-cli project console cache:clear";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,7 +203,7 @@ pub fn plan(
 ) -> Result<SyncLocalPlan, Error> {
     let compose_dir = resolve_compose_dir(process, cwd)?;
     let compose_dir = fs::canonicalize(&compose_dir).unwrap_or(compose_dir);
-    let env = ShopEnv::load_sync_local(compose_dir, process)?;
+    let env = ShopEnv::load(compose_dir, process)?;
     plan_with_env(&env, args)
 }
 
@@ -217,14 +215,15 @@ pub fn plan_with_env(env: &ShopEnv, args: &SyncLocalArgs) -> Result<SyncLocalPla
     };
 
     let logicals = normalize_sync_local_data(args.data.as_deref())?;
-    let key = alias_key(&from);
-    let (remote_data_root, derived_root_note) =
-        resolve_remote_data_root(env, &key, args.remote_data_root.as_deref())?;
-    if remote_data_root.is_empty() {
+    let (remote_root, derived_root_note) =
+        resolve_remote_data_root(env, args.remote_data_root.as_deref())?;
+    if remote_root.is_empty() {
         return Err(Error::fail("Remote data root is empty"));
     }
 
-    let (ssh_target, ssh_cmd) = resolve_ssh(env, &from, &env.compose_dir)?;
+    let ssh = resolve_ssh_source(&from, env)?;
+    let ssh_target = ssh.target.clone();
+    let ssh_cmd = ssh_argv_vec(&ssh);
     let shop_root = env.compose_dir.clone();
     if !is_project_dev_root(&shop_root) {
         return Err(Error::fail(format!(
@@ -236,7 +235,7 @@ pub fn plan_with_env(env: &ShopEnv, args: &SyncLocalArgs) -> Result<SyncLocalPla
     let live_checkout_warning = live_checkout_warning(&shop_root);
     let mut items = Vec::new();
     for logical in logicals {
-        let remote_src = format!("{}/{}", remote_data_root.trim_end_matches('/'), logical);
+        let remote_src = format!("{}/{}", remote_root.trim_end_matches('/'), logical);
         let local_dest = local_project_dest(&shop_root, &logical)?;
         let local_rel = local_project_rel(&logical)?;
         refuse_vps_data_root_dest(&local_dest, env)?;
@@ -253,7 +252,7 @@ pub fn plan_with_env(env: &ShopEnv, args: &SyncLocalArgs) -> Result<SyncLocalPla
         from,
         ssh_target,
         ssh_cmd,
-        remote_data_root,
+        remote_data_root: remote_root,
         shop_id: env.get("SHOPWARE_SHOP_ID").map(str::to_string),
         items,
         delete: args.delete,
@@ -333,15 +332,13 @@ fn is_project_dev_root(shop: &Path) -> bool {
 }
 
 fn refuse_vps_data_root_dest(dest: &Path, env: &ShopEnv) -> Result<(), Error> {
-    for key in ["SHOPWARE_DATA_ROOT", "SYNC_DATA_ROOT"] {
-        if let Some(root) = env.get(key) {
-            let root = PathBuf::from(root);
-            if dest == root {
-                return Err(Error::fail(format!(
-                    "Refusing to write into {key} ({}); local destinations are project-tree paths (./public/media, ./files, …), never VPS bind-mount roots.",
-                    dest.display()
-                )));
-            }
+    if let Some(root) = env.get("SHOPWARE_DATA_ROOT") {
+        let root = PathBuf::from(root);
+        if dest == root {
+            return Err(Error::fail(format!(
+                "Refusing to write into SHOPWARE_DATA_ROOT ({}); local destinations are project-tree paths (./public/media, ./files, …), never VPS bind-mount roots.",
+                dest.display()
+            )));
         }
     }
     Ok(())
@@ -349,78 +346,25 @@ fn refuse_vps_data_root_dest(dest: &Path, env: &ShopEnv) -> Result<(), Error> {
 
 fn resolve_remote_data_root(
     env: &ShopEnv,
-    alias_key: &str,
     flag: Option<&str>,
 ) -> Result<(String, Option<String>), Error> {
     if let Some(flag) = flag.map(str::trim).filter(|s| !s.is_empty()) {
         return Ok((flag.to_string(), None));
     }
-    let specific = format!("SYNC_{alias_key}_DATA_ROOT");
-    if let Some(root) = env.get(&specific) {
+    if let Some(root) = env.get("SHOPWARE_REMOTE_DATA_ROOT") {
         return Ok((root.to_string(), None));
     }
-    if let Some(root) = env.get("SYNC_REMOTE_DATA_ROOT") {
-        return Ok((root.to_string(), None));
-    }
-    let shop_id = env.get("SHOPWARE_SHOP_ID").ok_or_else(|| {
+    let shop_id = require_shop_id(env).map_err(|_| {
         Error::fail(
-            "SHOPWARE_SHOP_ID is required in shop-root .env (stable shop slug, same as the VPS), or pass --remote-data-root / set SYNC_REMOTE_DATA_ROOT.",
+            "SHOPWARE_SHOP_ID is required in shop-root .env (stable shop slug, same as the VPS), or pass --remote-data-root / set SHOPWARE_REMOTE_DATA_ROOT.",
         )
     })?;
-    let data_base = env.get("SHOPWARE_DATA_BASE").unwrap_or(DEFAULT_DATA_BASE);
-    let source_env = env.get("SYNC_SOURCE_ENV").unwrap_or(DEFAULT_SOURCE_ENV);
-    let root = format!("{data_base}/{shop_id}/{source_env}");
-    let note = format!("Remote data root derived {root} (shop={shop_id} env={source_env})");
-    Ok((root, Some(note)))
-}
-
-fn pick_alias_env(env: &ShopEnv, key: &str, suffix: &str) -> Option<String> {
-    let specific = format!("SYNC_{key}_{suffix}");
-    if let Some(v) = env.get(&specific) {
-        return Some(v.to_string());
-    }
-    env.get(&format!("SYNC_{suffix}")).map(str::to_string)
-}
-
-fn resolve_ssh(
-    env: &ShopEnv,
-    from: &str,
-    shop_root: &Path,
-) -> Result<(String, Vec<String>), Error> {
-    let key = alias_key(from);
-    let host = pick_alias_env(env, &key, "SSH_HOST").unwrap_or_else(|| from.to_string());
-    let user = pick_alias_env(env, &key, "SSH_USER");
-    let port = pick_alias_env(env, &key, "SSH_PORT").unwrap_or_else(|| "22".to_string());
-    let keyfile = pick_alias_env(env, &key, "SSH_KEY");
-
-    let mut ssh_cmd = vec![
-        "ssh".into(),
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-p".into(),
-        port,
-    ];
-    if let Some(kf) = keyfile {
-        let p = Path::new(&kf);
-        let resolved = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            shop_root.join(p)
-        };
-        if !resolved.is_file() {
-            return Err(Error::fail(format!("SYNC_SSH_KEY not found: {kf}")));
-        }
-        ssh_cmd.push("-o".into());
-        ssh_cmd.push("IdentitiesOnly=yes".into());
-        ssh_cmd.push("-i".into());
-        ssh_cmd.push(resolved.to_string_lossy().into_owned());
-    }
-
-    let target = match user {
-        Some(u) => format!("{u}@{host}"),
-        None => host,
-    };
-    Ok((target, ssh_cmd))
+    let root = remote_data_root(env, &shop_id);
+    let note = format!(
+        "Remote data root derived {} (shop={shop_id} env=live)",
+        root.display()
+    );
+    Ok((root.display().to_string(), Some(note)))
 }
 
 fn posix_quote(s: &str) -> String {
@@ -476,7 +420,7 @@ fn probe_ssh(plan: &SyncLocalPlan) -> Result<(), Error> {
         .map_err(|e| Error::fail(format!("failed to exec ssh: {e}")))?;
     if !status.success() {
         return Err(Error::fail(format!(
-            "SSH to {} failed (BatchMode, no password prompts). Check Host {} in ~/.ssh/config, SYNC_SSH_HOST/USER/PORT/KEY, and known_hosts.",
+            "SSH to {} failed (BatchMode, no password prompts). Check Host {} in ~/.ssh/config, SHOPWARE_SSH_HOST/USER/KEY, and known_hosts.",
             plan.ssh_target, plan.from
         )));
     }
@@ -672,7 +616,6 @@ mod tests {
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=dev
 SHOPWARE_DATA_ROOT=/var/lib/shopware/data/acme/dev
-SYNC_DATA_ROOT=/var/lib/shopware/data/acme/dev
 ",
         );
         let plan = plan(
@@ -781,16 +724,14 @@ SYNC_DATA_ROOT=/var/lib/shopware/data/acme/dev
     }
 
     #[test]
-    fn per_alias_data_root_and_ssh() {
+    fn shopware_ssh_and_remote_root() {
         let shop = TempShop::new("alias");
         shop.write_env(
             "\
 SHOPWARE_SHOP_ID=acme
-SYNC_REMOTE_DATA_ROOT=/should-not-win
-SYNC_STAGING_DATA_ROOT=/vps/staging-data
-SYNC_STAGING_SSH_HOST=staging.example
-SYNC_STAGING_SSH_USER=deploy
-SYNC_STAGING_SSH_PORT=2222
+SHOPWARE_REMOTE_DATA_ROOT=/vps/staging-data
+SHOPWARE_SSH_HOST=staging.example
+SHOPWARE_SSH_USER=deploy
 ",
         );
         let plan = plan(
@@ -806,7 +747,7 @@ SYNC_STAGING_SSH_PORT=2222
         assert!(plan
             .ssh_cmd
             .windows(2)
-            .any(|w| w[0] == "-p" && w[1] == "2222"));
+            .any(|w| w[0] == "-p" && w[1] == "22"));
         let dry = plan.dry_run_rsync_line(&plan.items[0]);
         assert!(dry.contains("--delete"), "{dry}");
         assert_eq!(
@@ -821,12 +762,12 @@ SYNC_STAGING_SSH_PORT=2222
         shop.write_env(
             "\
 SHOPWARE_SHOP_ID=fromfile
-SYNC_REMOTE_DATA_ROOT=/fromfile
+SHOPWARE_REMOTE_DATA_ROOT=/fromfile
 ",
         );
         let mut process = process(shop.path());
         process.insert("SHOPWARE_SHOP_ID".into(), "fromproc".into());
-        process.insert("SYNC_REMOTE_DATA_ROOT".into(), "/fromproc".into());
+        process.insert("SHOPWARE_REMOTE_DATA_ROOT".into(), "/fromproc".into());
         let plan = plan(
             &process,
             shop.path(),
@@ -838,7 +779,7 @@ SYNC_REMOTE_DATA_ROOT=/fromfile
     }
 
     #[test]
-    fn env_prod_is_not_loaded() {
+    fn env_prod_is_loaded() {
         let shop = TempShop::new("prod");
         shop.write_env("SHOPWARE_SHOP_ID=fromenv\n");
         fs::write(
@@ -852,17 +793,17 @@ SYNC_REMOTE_DATA_ROOT=/fromfile
             &args(None, Some("media"), None, false),
         )
         .unwrap();
-        assert_eq!(plan.shop_id.as_deref(), Some("fromenv"));
-        assert_eq!(plan.remote_data_root, "/var/lib/shopware/data/fromenv/live");
+        assert_eq!(plan.shop_id.as_deref(), Some("fromprod"));
+        assert_eq!(plan.remote_data_root, "/fromprod/fromprod/live");
     }
 
     #[test]
-    fn sync_env_file_sets_ssh_host() {
+    fn env_local_sets_ssh_host() {
         let shop = TempShop::new("syncenv");
         shop.write_env("SHOPWARE_SHOP_ID=acme\n");
         fs::write(
-            shop.path().join("deploy/sync.env"),
-            "SYNC_SSH_HOST=vps.example\nSYNC_SSH_USER=root\n",
+            shop.path().join(".env.local"),
+            "SHOPWARE_SSH_HOST=vps.example\nSHOPWARE_SSH_USER=root\n",
         )
         .unwrap();
         let plan = plan(
@@ -899,7 +840,7 @@ SYNC_REMOTE_DATA_ROOT=/fromfile
         shop.write_env(
             "\
 SHOPWARE_SHOP_ID=acme
-SYNC_SSH_KEY=/no/such/key
+SHOPWARE_SSH_KEY=/no/such/key
 ",
         );
         let err = plan(
@@ -908,7 +849,10 @@ SYNC_SSH_KEY=/no/such/key
             &args(None, Some("media"), None, false),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("SYNC_SSH_KEY not found"), "{err}");
+        assert!(
+            err.to_string().contains("SHOPWARE_SSH_KEY not found"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -927,7 +871,7 @@ SYNC_SSH_KEY=/no/such/key
     }
 
     #[test]
-    fn source_env_override_derives_remote() {
+    fn leftover_source_env_fails_without_remote_root() {
         let shop = TempShop::new("srcenv");
         shop.write_env(
             "\
@@ -936,16 +880,15 @@ SHOPWARE_DATA_BASE=/data
 SYNC_SOURCE_ENV=staging
 ",
         );
-        let plan = plan(
+        let err = plan(
             &process(shop.path()),
             shop.path(),
             &args(None, Some("sitemap"), None, false),
         )
-        .unwrap();
-        assert_eq!(plan.remote_data_root, "/data/acme/staging");
-        assert_eq!(
-            plan.mapping_line(&plan.items[0]),
-            "live:/data/acme/staging/sitemap/ → ./public/sitemap/"
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("SHOPWARE_REMOTE_DATA_ROOT"),
+            "{err}"
         );
     }
 }

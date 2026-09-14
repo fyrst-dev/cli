@@ -1,7 +1,10 @@
 //! Shop-root discovery, `.env` loading, and Compose project name.
 //!
-//! Identity overlay matches `deploy/lib/sync-commands.sh`: files are loaded
-//! then process-env presets win for shop identity keys (non-empty only).
+//! One loader for every shopware verb: process env is the base, then
+//! `.env`, `.env.local` (if present), `.env.prod` (if present). Later files
+//! win except identity / process-win keys, which a non-empty process value
+//! still owns. Leftover `SYNC_*` / `BACKUP_SSH_*` / `BACKUP_ALLOW_*` names
+//! fail when the replacement is unset.
 
 use super::envfile::parse_env_file;
 use super::error::Error;
@@ -9,60 +12,35 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const IDENTITY_KEYS: &[&str] = &[
-    "SYNC_ENV",
-    "IMAGE",
-    "IMAGE_TAG",
-    "SYNC_DATA_ROOT",
+/// Keys a non-empty process value keeps after files load (same safety as
+/// today's identity / VPS / backup win-lists, new names only).
+const PROCESS_WINS: &[&str] = &[
     "SHOPWARE_SHOP_ID",
     "SHOPWARE_DEPLOY_ENV",
+    "IMAGE",
+    "IMAGE_TAG",
     "COMPOSE_PROJECT_NAME",
     "SHOPWARE_DATA_ROOT",
     "SHOPWARE_DATA_BASE",
-    "SYNC_SOURCE_ENV",
-    "SYNC_REMOTE_DATA_ROOT",
-];
-
-/// Process-env wins (non-empty) after `deploy/backup.env`, matching
-/// `backup-runtime.sh` PRESET_BACKUP_* restoration.
-pub const BACKUP_PRESET_KEYS: &[&str] = &[
-    "BACKUP_TARGET",
-    "BACKUP_KEEP_DAYS",
-    "BACKUP_SSH_KEY",
-    "BACKUP_SSH_PORT",
-    "BACKUP_DB_DUMP",
-    "BACKUP_CONFIRM_RESTORE",
-    "BACKUP_ALLOW_LIVE_RESTORE",
-];
-
-const ENV_FILES: &[&str] = &[".env", ".env.prod", "deploy/sync.env"];
-
-/// Overlay `sync-runtime-local.sh` sources shop-root `.env` then `deploy/sync.env`
-/// (not `.env.prod`).
-pub const SYNC_LOCAL_ENV_FILES: &[&str] = &[".env", "deploy/sync.env"];
-
-/// VPS release/rollback load `.env` then `.env.prod` only (no `deploy/sync.env`).
-const VPS_ENV_FILES: &[&str] = &[".env", ".env.prod"];
-
-/// CI / process-env keys that win over `.env` after the file load (non-empty).
-const VPS_PROCESS_WINS: &[&str] = &[
-    "SYNC_ENV",
-    "IMAGE",
-    "IMAGE_TAG",
-    "SYNC_DATA_ROOT",
-    "SHOPWARE_SHOP_ID",
-    "SHOPWARE_DEPLOY_ENV",
-    "COMPOSE_PROJECT_NAME",
-    "SHOPWARE_DATA_ROOT",
-    "SHOPWARE_DATA_BASE",
-    "SYNC_SOURCE_ENV",
-    "SYNC_REMOTE_DATA_ROOT",
+    "SHOPWARE_REMOTE_DATA_ROOT",
+    "SHOPWARE_SSH_HOST",
+    "SHOPWARE_SSH_USER",
+    "SHOPWARE_SSH_KEY",
+    "SHOPWARE_ALLOW_LIVE_RESTORE",
+    "APP_URL",
     "SMOKE_URL",
     "COMPOSE_PROFILES",
     "ROLLBACK_ON_SMOKE_FAIL",
     "SKIP_PULL",
     "PULL_POLICY",
+    "BACKUP_TARGET",
+    "BACKUP_KEEP_DAYS",
+    "BACKUP_DB_DUMP",
+    "BACKUP_CONFIRM_RESTORE",
 ];
+
+/// Root `.env.*` only. Later file wins. Never `deploy/*.env`.
+const ENV_FILES: &[&str] = &[".env", ".env.local", ".env.prod"];
 
 pub const COMPOSE_FILES: &[&str] = &[
     "deploy/compose.yaml",
@@ -70,8 +48,30 @@ pub const COMPOSE_FILES: &[&str] = &[
     "deploy/compose.vps.yaml",
 ];
 
-/// Overlay `DEFAULT_DATA_BASE` (`deploy/lib/identity.sh`).
 pub const DEFAULT_DATA_BASE: &str = "/var/lib/shopware/data";
+pub const DEFAULT_REMOTE_ENV: &str = "live";
+pub const DEFAULT_ARCHIVE_IMAGE: &str = "alpine:3.20";
+pub const DEFAULT_BACKUP_TARGET: &str = "local";
+
+const EXACT_LEGACY: &[(&str, &str)] = &[
+    ("SYNC_ENV", "SHOPWARE_DEPLOY_ENV"),
+    ("SYNC_DATA_ROOT", "SHOPWARE_DATA_ROOT"),
+    ("SYNC_SSH_HOST", "SHOPWARE_SSH_HOST"),
+    ("SYNC_SSH_USER", "SHOPWARE_SSH_USER"),
+    ("SYNC_SSH_KEY", "SHOPWARE_SSH_KEY"),
+    ("SYNC_ALLOW_LIVE_RESTORE", "SHOPWARE_ALLOW_LIVE_RESTORE"),
+    ("SYNC_APP_URL", "APP_URL"),
+    ("SYNC_REWRITE_APP_URL", "APP_URL"),
+    ("SYNC_REWRITE_URL_MAP", "APP_URL"),
+    ("SYNC_REMOTE_DATA_ROOT", "SHOPWARE_REMOTE_DATA_ROOT"),
+    ("SYNC_SOURCE_ENV", "SHOPWARE_REMOTE_DATA_ROOT"),
+    ("BACKUP_SSH_HOST", "SHOPWARE_SSH_HOST"),
+    ("BACKUP_SSH_USER", "SHOPWARE_SSH_USER"),
+    ("BACKUP_SSH_KEY", "SHOPWARE_SSH_KEY"),
+    ("BACKUP_SSH_PORT", "SHOPWARE_SSH_HOST"),
+    ("SYNC_SSH_PORT", "SHOPWARE_SSH_HOST"),
+    ("BACKUP_ALLOW_LIVE_RESTORE", "SHOPWARE_ALLOW_LIVE_RESTORE"),
+];
 
 #[derive(Debug)]
 pub struct ShopEnv {
@@ -80,46 +80,11 @@ pub struct ShopEnv {
 }
 
 impl ShopEnv {
-    pub fn load(compose_dir: PathBuf, process: &HashMap<String, String>) -> Result<Self, Error> {
-        Self::load_files(compose_dir, process, ENV_FILES, IDENTITY_KEYS)
-    }
-
-    /// Overlay `vps_load_shop_env` + `vps_restore_cli_env`: `.env` / `.env.prod`,
-    /// then non-empty process `IMAGE` / `IMAGE_TAG` (and other VPS knobs) win.
-    pub fn load_vps(
-        compose_dir: PathBuf,
-        process: &HashMap<String, String>,
-    ) -> Result<Self, Error> {
-        Self::load_files(compose_dir, process, VPS_ENV_FILES, VPS_PROCESS_WINS)
-    }
-
-    /// Overlay `sync-runtime-local.sh`: `.env` then `deploy/sync.env` (no `.env.prod`).
-    pub fn load_sync_local(
-        compose_dir: PathBuf,
-        process: &HashMap<String, String>,
-    ) -> Result<Self, Error> {
-        Self::load_files(compose_dir, process, SYNC_LOCAL_ENV_FILES, IDENTITY_KEYS)
-    }
-
-    /// `.env` / `.env.prod` / `deploy/sync.env` then `deploy/backup.env` with BACKUP_* presets.
-    pub fn load_backup(
-        compose_dir: PathBuf,
-        process: &HashMap<String, String>,
-    ) -> Result<Self, Error> {
-        let mut env = Self::load(compose_dir, process)?;
-        env.load_backup_overlay(process)?;
-        Ok(env)
-    }
-
-    fn load_files(
-        compose_dir: PathBuf,
-        process: &HashMap<String, String>,
-        files: &[&str],
-        process_wins: &[&str],
-    ) -> Result<Self, Error> {
+    /// Load shop-root `.env` / `.env.local` / `.env.prod` for every shopware verb.
+    pub fn load(project_root: PathBuf, process: &HashMap<String, String>) -> Result<Self, Error> {
         let mut vars = process.clone();
-        for rel in files {
-            let path = compose_dir.join(rel);
+        for rel in ENV_FILES {
+            let path = project_root.join(rel);
             if path.is_file() {
                 let contents = fs::read_to_string(&path)
                     .map_err(|e| Error::fail(format!("cannot read {}: {e}", path.display())))?;
@@ -128,12 +93,16 @@ impl ShopEnv {
                 }
             }
         }
-        for key in process_wins {
+        for key in PROCESS_WINS {
             if let Some(preset) = process.get(*key).filter(|s| !s.is_empty()) {
                 vars.insert((*key).to_string(), preset.clone());
             }
         }
-        Ok(Self { compose_dir, vars })
+        reject_legacy_names(&vars)?;
+        Ok(Self {
+            compose_dir: project_root,
+            vars,
+        })
     }
 
     /// Non-empty value, same idea as bash `${VAR:-}` for required checks.
@@ -148,38 +117,75 @@ impl ShopEnv {
         self.vars.insert(key.into(), value.into());
     }
 
-    pub fn merge_env_file(&mut self, path: &Path) -> Result<(), Error> {
-        if !path.is_file() {
-            return Ok(());
-        }
-        let contents = fs::read_to_string(path)
-            .map_err(|e| Error::fail(format!("cannot read {}: {e}", path.display())))?;
-        for (k, v) in parse_env_file(&contents) {
-            self.vars.insert(k, v);
-        }
-        Ok(())
-    }
-
-    pub fn restore_process_presets(&mut self, process: &HashMap<String, String>, keys: &[&str]) {
-        for key in keys {
-            if let Some(preset) = process.get(*key).filter(|s| !s.is_empty()) {
-                self.vars.insert((*key).to_string(), preset.clone());
-            }
-        }
-    }
-
-    /// Overlay `deploy/backup.env` then process-env BACKUP_* / identity presets.
-    pub fn load_backup_overlay(&mut self, process: &HashMap<String, String>) -> Result<(), Error> {
-        self.merge_env_file(&self.compose_dir.join("deploy/backup.env"))?;
-        self.restore_process_presets(process, IDENTITY_KEYS);
-        self.restore_process_presets(process, BACKUP_PRESET_KEYS);
-        Ok(())
-    }
-
     #[cfg(test)]
     pub fn from_vars(compose_dir: PathBuf, vars: HashMap<String, String>) -> Self {
         Self { compose_dir, vars }
     }
+}
+
+fn is_set(vars: &HashMap<String, String>, key: &str) -> bool {
+    vars.get(key).map(|s| !s.is_empty()).unwrap_or(false)
+}
+
+fn replacement_for(key: &str) -> Option<&'static str> {
+    for (old, new) in EXACT_LEGACY {
+        if *old == key {
+            return Some(*new);
+        }
+    }
+    if key.starts_with("BACKUP_ALLOW_") {
+        return Some("SHOPWARE_ALLOW_LIVE_RESTORE");
+    }
+    if key.starts_with("BACKUP_SSH_") {
+        return match key {
+            "BACKUP_SSH_KEY" => Some("SHOPWARE_SSH_KEY"),
+            "BACKUP_SSH_USER" => Some("SHOPWARE_SSH_USER"),
+            _ => Some("SHOPWARE_SSH_HOST"),
+        };
+    }
+    let rest = key.strip_prefix("SYNC_")?;
+    if rest.ends_with("_SSH_HOST") || rest == "SSH_HOST" {
+        return Some("SHOPWARE_SSH_HOST");
+    }
+    if rest.ends_with("_SSH_USER") || rest == "SSH_USER" {
+        return Some("SHOPWARE_SSH_USER");
+    }
+    if rest.ends_with("_SSH_KEY") || rest == "SSH_KEY" {
+        return Some("SHOPWARE_SSH_KEY");
+    }
+    if rest.ends_with("_DATA_ROOT") {
+        return Some("SHOPWARE_REMOTE_DATA_ROOT");
+    }
+    None
+}
+
+/// Fail when an old name is set and its replacement is unset. No silent aliases.
+pub fn reject_legacy_names(vars: &HashMap<String, String>) -> Result<(), Error> {
+    let mut missing: Vec<(&str, String)> = Vec::new();
+    for key in vars.keys() {
+        if !is_set(vars, key) {
+            continue;
+        }
+        let Some(new) = replacement_for(key) else {
+            continue;
+        };
+        if !is_set(vars, new) && !missing.iter().any(|(n, old)| *n == new && old == key) {
+            missing.push((new, key.clone()));
+        }
+    }
+    missing.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
+    missing.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let detail = missing
+        .iter()
+        .map(|(new, old)| format!("{new} (found leftover {old})"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(Error::fail(format!(
+        "{detail} is required. Leftover SYNC_*/BACKUP_SSH_*/BACKUP_ALLOW_* names are no longer read."
+    )))
 }
 
 pub fn resolve_compose_dir(
@@ -292,14 +298,16 @@ pub fn require_deploy_env(env: &ShopEnv) -> Result<String, Error> {
         })
 }
 
-pub const DEFAULT_ARCHIVE_IMAGE: &str = "alpine:3.20";
-
 /// Overlay `vps_env_truthy`: `1` / `true` / `yes` / `on` (case-insensitive).
 pub fn env_truthy(value: Option<&str>) -> bool {
     match value.map(str::trim).filter(|s| !s.is_empty()) {
         Some(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
         None => false,
     }
+}
+
+pub fn allow_live_restore(env: &ShopEnv) -> bool {
+    env_truthy(env.get("SHOPWARE_ALLOW_LIVE_RESTORE"))
 }
 
 /// `(project_name, derived_from_shop_id_and_env)`.
@@ -315,16 +323,9 @@ pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
     }
 }
 
-/// Work directory for sync capture/apply (`--snapshot-dir` or `SYNC_SNAPSHOT_DIR`).
-pub fn resolve_snapshot_dir(cli_dir: Option<&str>, env: &ShopEnv, compose_dir: &Path) -> PathBuf {
+/// Work directory for sync capture/apply (`--snapshot-dir`, else `var/runtime-sync`).
+pub fn resolve_snapshot_dir(cli_dir: Option<&str>, _env: &ShopEnv, compose_dir: &Path) -> PathBuf {
     if let Some(d) = cli_dir.map(str::trim).filter(|s| !s.is_empty()) {
-        let p = PathBuf::from(d);
-        if p.is_absolute() {
-            p
-        } else {
-            compose_dir.join(p)
-        }
-    } else if let Some(d) = env.get("SYNC_SNAPSHOT_DIR") {
         let p = PathBuf::from(d);
         if p.is_absolute() {
             p
@@ -340,36 +341,27 @@ pub fn data_base(env: &ShopEnv) -> &str {
     env.get("SHOPWARE_DATA_BASE").unwrap_or(DEFAULT_DATA_BASE)
 }
 
-pub fn archive_image(env: &ShopEnv) -> String {
-    env.get("SYNC_ARCHIVE_IMAGE")
-        .unwrap_or(DEFAULT_ARCHIVE_IMAGE)
-        .to_string()
+pub fn archive_image(_env: &ShopEnv) -> String {
+    DEFAULT_ARCHIVE_IMAGE.to_string()
 }
 
 pub fn derived_data_root(env: &ShopEnv, shop_id: &str, deploy_env: &str) -> PathBuf {
     PathBuf::from(data_base(env)).join(shop_id).join(deploy_env)
 }
 
-/// Bind-mount root on this host (`SYNC_DATA_ROOT` / `SHOPWARE_DATA_ROOT` / derived).
+/// Bind-mount root on this host (`SHOPWARE_DATA_ROOT` or identity formula).
 pub fn derive_local_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
     Ok(local_data_root(env)?.0)
 }
 
-/// Local bind-mount root plus whether the path was derived (overlay logs that case).
+/// Local bind-mount root plus whether the path was derived.
 pub fn local_data_root(env: &ShopEnv) -> Result<(PathBuf, bool), Error> {
-    if let Some(p) = env.get("SYNC_DATA_ROOT") {
-        return Ok((PathBuf::from(p), false));
-    }
     if let Some(p) = env.get("SHOPWARE_DATA_ROOT") {
         return Ok((PathBuf::from(p), false));
     }
     let shop_id = require_shop_id(env)?;
-    let deploy_env = env.get("SHOPWARE_DEPLOY_ENV").ok_or_else(|| {
-        Error::fail(
-            "SHOPWARE_DEPLOY_ENV is required to derive SHOPWARE_DATA_ROOT (live|staging|playground|dev). Set it in .env, or set SHOPWARE_DATA_ROOT / SYNC_DATA_ROOT explicitly.",
-        )
-    })?;
-    Ok((derived_data_root(env, &shop_id, deploy_env), true))
+    let deploy_env = require_deploy_env(env)?;
+    Ok((derived_data_root(env, &shop_id, &deploy_env), true))
 }
 
 /// Alias used by `sync apply` (same resolution as capture).
@@ -377,7 +369,7 @@ pub fn resolve_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
     derive_local_data_root(env)
 }
 
-/// Backup bind-mount root: `SHOPWARE_DATA_ROOT` or `$SHOPWARE_DATA_BASE/$shop_id/$deploy_env`.
+/// Backup bind-mount root: same formula as [`local_data_root`].
 pub fn resolve_backup_data_root(env: &ShopEnv, shop_id: &str, deploy_env: &str) -> (PathBuf, bool) {
     if let Some(root) = env.get("SHOPWARE_DATA_ROOT") {
         return (PathBuf::from(root), false);
@@ -385,17 +377,17 @@ pub fn resolve_backup_data_root(env: &ShopEnv, shop_id: &str, deploy_env: &str) 
     (derived_data_root(env, shop_id, deploy_env), true)
 }
 
-/// Remote env directory (`SYNC_SOURCE_ENV`, else `--from` alias, else `live`).
-pub fn source_env_for_remote(from: &str, env: &ShopEnv) -> String {
-    if let Some(s) = env.get("SYNC_SOURCE_ENV") {
-        return s.to_string();
+/// Remote live data: `SHOPWARE_REMOTE_DATA_ROOT` or `{base}/{shop_id}/live`.
+pub fn remote_data_root(env: &ShopEnv, shop_id: &str) -> PathBuf {
+    if let Some(p) = env.get("SHOPWARE_REMOTE_DATA_ROOT") {
+        return PathBuf::from(p);
     }
-    let from_lc = from.trim().to_ascii_lowercase();
-    if !from_lc.is_empty() && from_lc != "local" && from_lc != "this" {
-        from_lc
-    } else {
-        "live".into()
-    }
+    derived_data_root(env, shop_id, DEFAULT_REMOTE_ENV)
+}
+
+/// Remote env directory for derived live data (`live`).
+pub fn source_env_for_remote(_from: &str, _env: &ShopEnv) -> String {
+    DEFAULT_REMOTE_ENV.to_string()
 }
 
 pub fn have_cmd(name: &str) -> bool {
@@ -553,6 +545,61 @@ services:
     }
 
     #[test]
+    fn later_file_wins_except_process_identity() {
+        let shop = temp_shop("later-file");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=fromenv\nAPP_URL=http://from-env\nBACKUP_TARGET=/from-env\n",
+        )
+        .unwrap();
+        fs::write(
+            shop.join(".env.local"),
+            "APP_URL=http://from-local\nSHOPWARE_SSH_HOST=vps.local\nBACKUP_TARGET=/from-local\n",
+        )
+        .unwrap();
+        fs::write(
+            shop.join(".env.prod"),
+            "APP_URL=http://from-prod\nSMOKE_URL=http://smoke\n",
+        )
+        .unwrap();
+        let mut process = HashMap::new();
+        process.insert("SHOPWARE_SHOP_ID".into(), "fromproc".into());
+        let env = ShopEnv::load(shop.clone(), &process).unwrap();
+        assert_eq!(env.get("SHOPWARE_SHOP_ID"), Some("fromproc"));
+        assert_eq!(env.get("APP_URL"), Some("http://from-prod"));
+        assert_eq!(env.get("SHOPWARE_SSH_HOST"), Some("vps.local"));
+        assert_eq!(env.get("BACKUP_TARGET"), Some("/from-local"));
+        assert_eq!(env.get("SMOKE_URL"), Some("http://smoke"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn deploy_sync_env_is_not_loaded() {
+        let shop = temp_shop("ignore-sync-env");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=staging\n",
+        )
+        .unwrap();
+        fs::create_dir_all(shop.join("deploy")).unwrap();
+        fs::write(
+            shop.join("deploy/sync.env"),
+            "SHOPWARE_SHOP_ID=from-sync-env\nSHOPWARE_SSH_HOST=should-not-load\n",
+        )
+        .unwrap();
+        fs::write(
+            shop.join("deploy/backup.env"),
+            "BACKUP_TARGET=/should-not-load\n",
+        )
+        .unwrap();
+        let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
+        assert_eq!(env.get("SHOPWARE_SHOP_ID"), Some("acme"));
+        assert!(env.get("SHOPWARE_SSH_HOST").is_none());
+        assert!(env.get("BACKUP_TARGET").is_none());
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
     fn vps_ci_image_tag_wins_over_env_latest() {
         let shop = temp_shop("vps-ci-tag");
         fs::write(
@@ -567,20 +614,85 @@ COMPOSE_PROFILES=redis
 ",
         )
         .unwrap();
-        fs::write(
-            shop.join("deploy/sync.env"),
-            "IMAGE_TAG=from-sync-env\nSMOKE_URL=http://from-sync\n",
-        )
-        .unwrap();
         let mut process = HashMap::new();
         process.insert("IMAGE".into(), "ghcr.io/from-ci/shop".into());
         process.insert("IMAGE_TAG".into(), "abc123deadbeef".into());
         process.insert("SMOKE_URL".into(), "http://127.0.0.1:8000".into());
-        let env = ShopEnv::load_vps(shop.clone(), &process).unwrap();
+        let env = ShopEnv::load(shop.clone(), &process).unwrap();
         assert_eq!(env.get("IMAGE"), Some("ghcr.io/from-ci/shop"));
         assert_eq!(env.get("IMAGE_TAG"), Some("abc123deadbeef"));
         assert_eq!(env.get("SMOKE_URL"), Some("http://127.0.0.1:8000"));
         assert_eq!(env.get("COMPOSE_PROFILES"), Some("redis"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn leftover_sync_ssh_fails_without_replacement() {
+        let shop = temp_shop("legacy-ssh");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSYNC_SSH_HOST=vps.example\n",
+        )
+        .unwrap();
+        let err = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("SHOPWARE_SSH_HOST"), "{msg}");
+        assert!(msg.contains("SYNC_SSH_HOST"), "{msg}");
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn leftover_sync_ssh_ok_when_replacement_set() {
+        let shop = temp_shop("legacy-ssh-ok");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSYNC_SSH_HOST=old.example\nSHOPWARE_SSH_HOST=new.example\n",
+        )
+        .unwrap();
+        let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
+        assert_eq!(env.get("SHOPWARE_SSH_HOST"), Some("new.example"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn leftover_sync_app_url_fails_without_app_url() {
+        let shop = temp_shop("legacy-app-url");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSYNC_APP_URL=https://old.example\n",
+        )
+        .unwrap();
+        let err = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap_err();
+        assert!(err.to_string().contains("APP_URL"), "{err}");
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn leftover_backup_allow_fails_without_shopware_allow() {
+        let shop = temp_shop("legacy-allow");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nBACKUP_ALLOW_LIVE_RESTORE=1\n",
+        )
+        .unwrap();
+        let err = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap_err();
+        assert!(
+            err.to_string().contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
+            "{err}"
+        );
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn leftover_alias_ssh_fails_with_shopware_ssh() {
+        let shop = temp_shop("legacy-alias");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSYNC_LIVE_SSH_USER=deploy\n",
+        )
+        .unwrap();
+        let err = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap_err();
+        assert!(err.to_string().contains("SHOPWARE_SSH_USER"), "{err}");
         let _ = fs::remove_dir_all(&shop);
     }
 
@@ -631,26 +743,18 @@ COMPOSE_PROFILES=redis
     }
 
     #[test]
-    fn local_data_root_prefers_sync_then_shopware_then_derived() {
+    fn local_data_root_override_then_derived() {
         let mut vars = HashMap::new();
         vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
         vars.insert("SHOPWARE_DEPLOY_ENV".into(), "staging".into());
         vars.insert("SHOPWARE_DATA_ROOT".into(), "/data/shopware".into());
-        vars.insert("SYNC_DATA_ROOT".into(), "/override".into());
         let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
         assert_eq!(
             derive_local_data_root(&env).unwrap(),
-            PathBuf::from("/override")
+            PathBuf::from("/data/shopware")
         );
-        assert_eq!(resolve_data_root(&env).unwrap(), PathBuf::from("/override"));
-
-        let mut vars = HashMap::new();
-        vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
-        vars.insert("SHOPWARE_DEPLOY_ENV".into(), "staging".into());
-        vars.insert("SHOPWARE_DATA_ROOT".into(), "/data/shopware".into());
-        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
         assert_eq!(
-            derive_local_data_root(&env).unwrap(),
+            resolve_data_root(&env).unwrap(),
             PathBuf::from("/data/shopware")
         );
 
@@ -665,14 +769,24 @@ COMPOSE_PROFILES=redis
     }
 
     #[test]
-    fn remote_source_env_from_from_alias() {
-        let env = ShopEnv::from_vars(PathBuf::from("/shop"), HashMap::new());
-        assert_eq!(source_env_for_remote("live", &env), "live");
-        assert_eq!(source_env_for_remote("staging", &env), "staging");
+    fn remote_data_root_override_else_live_formula() {
         let mut vars = HashMap::new();
-        vars.insert("SYNC_SOURCE_ENV".into(), "playground".into());
+        vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
+        vars.insert("SHOPWARE_DATA_BASE".into(), "/opt/data".into());
         let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
-        assert_eq!(source_env_for_remote("live", &env), "playground");
+        assert_eq!(
+            remote_data_root(&env, "acme"),
+            PathBuf::from("/opt/data/acme/live")
+        );
+        assert_eq!(source_env_for_remote("staging", &env), "live");
+
+        let mut vars = HashMap::new();
+        vars.insert("SHOPWARE_REMOTE_DATA_ROOT".into(), "/mnt/uploads".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
+        assert_eq!(
+            remote_data_root(&env, "acme"),
+            PathBuf::from("/mnt/uploads")
+        );
     }
 
     #[test]
@@ -717,6 +831,10 @@ COMPOSE_PROFILES=redis
         assert!(!env_truthy(Some("false")));
         assert!(!env_truthy(Some("")));
         assert!(!env_truthy(None));
+        let mut vars = HashMap::new();
+        vars.insert("SHOPWARE_ALLOW_LIVE_RESTORE".into(), "yes".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/shop"), vars);
+        assert!(allow_live_restore(&env));
     }
 
     #[test]
@@ -744,23 +862,16 @@ COMPOSE_PROFILES=redis
     }
 
     #[test]
-    fn backup_env_file_then_process_wins() {
+    fn backup_keys_from_env_then_process_wins() {
         let shop = temp_shop("backup-env");
         fs::write(
             shop.join(".env"),
-            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=live\n",
-        )
-        .unwrap();
-        fs::create_dir_all(shop.join("deploy")).unwrap();
-        fs::write(
-            shop.join("deploy/backup.env"),
-            "BACKUP_TARGET=/from-file\nBACKUP_KEEP_DAYS=7\n",
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=live\nBACKUP_TARGET=/from-file\nBACKUP_KEEP_DAYS=7\n",
         )
         .unwrap();
         let mut process = HashMap::new();
         process.insert("BACKUP_TARGET".into(), "/from-proc".into());
-        let mut env = ShopEnv::load(shop.clone(), &process).unwrap();
-        env.load_backup_overlay(&process).unwrap();
+        let env = ShopEnv::load(shop.clone(), &process).unwrap();
         assert_eq!(env.get("BACKUP_TARGET"), Some("/from-proc"));
         assert_eq!(env.get("BACKUP_KEEP_DAYS"), Some("7"));
         let _ = fs::remove_dir_all(&shop);

@@ -64,8 +64,7 @@ fn shopware_help_prints_command_tree() {
         "Import = fyrst-cli",
         "Backup = fyrst-cli shopware backup create",
         "Live policy",
-        "SYNC_ALLOW_LIVE_RESTORE",
-        "BACKUP_ALLOW_LIVE_RESTORE",
+        "SHOPWARE_ALLOW_LIVE_RESTORE",
         "sync = between environments / workdir",
         "backup = off-host disaster recovery",
     ] {

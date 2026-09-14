@@ -33,7 +33,7 @@ pub fn execute_release(
 ) -> Result<(), Error> {
     let compose_dir = resolve_compose_dir(process_env, cwd)?;
     let compose_dir = fs::canonicalize(&compose_dir).unwrap_or(compose_dir);
-    let env = ShopEnv::load_vps(compose_dir, process_env)?;
+    let env = ShopEnv::load(compose_dir, process_env)?;
     let mut ctx = bootstrap(&env, skip_pull, dry_run)?;
 
     for w in &ctx.warnings {

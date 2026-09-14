@@ -2,14 +2,14 @@
 //!
 //! Not `sync apply` (live→staging clone). `--artifact` (aliases `--stamp`,
 //! `--from`) and confirmation are required. Live needs
-//! `BACKUP_ALLOW_LIVE_RESTORE=1`; inner apply then sets
-//! `SYNC_ALLOW_LIVE_RESTORE=1`. DB import and bind-mount apply reuse the sync
-//! apply module. fyrst-cli does not dump.
+//! `SHOPWARE_ALLOW_LIVE_RESTORE`; inner apply then sets the same flag so
+//! hostname/checkout named live still passes the apply guard. DB import and
+//! bind-mount apply reuse the sync apply module. fyrst-cli does not dump.
 
 use super::data::normalize_data;
 use super::env::{
-    env_truthy, require_deploy_env, require_shop_id, resolve_compose_dir, resolve_data_root,
-    ShopEnv,
+    allow_live_restore, env_truthy, require_deploy_env, require_shop_id, resolve_compose_dir,
+    resolve_data_root, ShopEnv,
 };
 use super::error::Error;
 use super::restore;
@@ -28,7 +28,7 @@ pub fn run(args: BackupRecoverArgs) -> Result<(), Error> {
     let cwd = std::env::current_dir().map_err(|e| Error::fail(format!("cannot read cwd: {e}")))?;
     let compose_dir = resolve_compose_dir(&process_env, &cwd)?;
     let compose_dir = fs::canonicalize(&compose_dir).unwrap_or(compose_dir);
-    let mut env = ShopEnv::load_backup(compose_dir, &process_env)?;
+    let mut env = ShopEnv::load(compose_dir, &process_env)?;
     restore_from_args(&args, &mut env, &cwd)
 }
 
@@ -60,15 +60,15 @@ pub(crate) fn restore_from_args(
         ));
     }
 
-    if deploy_env_is_live(env) && !env_truthy(env.get("BACKUP_ALLOW_LIVE_RESTORE")) {
+    if deploy_env_is_live(env) && !allow_live_restore(env) {
         return Err(Error::fail(
-            "Refusing restore onto SHOPWARE_DEPLOY_ENV=live without BACKUP_ALLOW_LIVE_RESTORE=1 (disaster recovery only; quarterly drill on staging does not need this).",
+            "Refusing restore onto SHOPWARE_DEPLOY_ENV=live without SHOPWARE_ALLOW_LIVE_RESTORE=1 (disaster recovery only; quarterly drill on staging does not need this).",
         ));
     }
 
-    // Overlay always sets this for inner `sync apply` so the existing live
-    // guard allows DR (hostname/checkout named live on a staging drill too).
-    env.set("SYNC_ALLOW_LIVE_RESTORE", "1");
+    // Inner `sync apply` uses the same live gate (hostname/checkout named live
+    // on a staging drill too).
+    env.set("SHOPWARE_ALLOW_LIVE_RESTORE", "1");
 
     let dry_run = args.common.dry_run;
     let selection = normalize_data(args.common.data.as_deref(), false, false)?;
@@ -92,7 +92,7 @@ pub(crate) fn restore_from_args(
         println!("==> {n}");
     }
     println!(
-        "==> Restoring {} into {} (SYNC_ALLOW_LIVE_RESTORE for live DR)",
+        "==> Restoring {} into {} (SHOPWARE_ALLOW_LIVE_RESTORE for live DR)",
         artifact.display(),
         data_root,
     );
@@ -147,8 +147,11 @@ fn fetch_artifact(
 
     let shop_id = require_shop_id(env)?;
     let deploy_env = require_deploy_env(env)?;
-    let default_port = env.get("BACKUP_SSH_PORT").unwrap_or("22");
-    let mut target = parse_backup_target(env.get("BACKUP_TARGET").unwrap_or(""), default_port)?;
+    let mut target = parse_backup_target(
+        env.get("BACKUP_TARGET")
+            .unwrap_or(super::env::DEFAULT_BACKUP_TARGET),
+        "22",
+    )?;
     if let BackupTarget::Local { path } = &target {
         target = BackupTarget::Local {
             path: resolve_local_target_path(path, &env.compose_dir),
@@ -217,14 +220,14 @@ fn rsync_from_ssh(
             "rsync is required to fetch backups from an SSH BACKUP_TARGET",
         ));
     }
-    if let Some(key) = env.get("BACKUP_SSH_KEY") {
+    if let Some(key) = env.get("SHOPWARE_SSH_KEY") {
         if !Path::new(key).is_file() {
-            return Err(Error::fail(format!("BACKUP_SSH_KEY not found: {key}")));
+            return Err(Error::fail(format!("SHOPWARE_SSH_KEY not found: {key}")));
         }
     }
     fs::create_dir_all(dest)
         .map_err(|e| Error::fail(format!("cannot create {}: {e}", dest.display())))?;
-    let ssh_e_opt = ssh_e(target, env.get("BACKUP_SSH_KEY"))?;
+    let ssh_e_opt = ssh_e(target, env.get("SHOPWARE_SSH_KEY"))?;
     let ssh_target = target
         .ssh_destination()
         .ok_or_else(|| Error::fail("internal error: ssh_target on a local BACKUP_TARGET"))?;
@@ -239,7 +242,7 @@ fn rsync_from_ssh(
         .map_err(|e| Error::fail(format!("failed to exec rsync: {e}")))?;
     if !status.success() {
         return Err(Error::fail(format!(
-            "rsync from {ssh_target} failed (BatchMode). Check BACKUP_TARGET / BACKUP_SSH_KEY."
+            "rsync from {ssh_target} failed (BatchMode). Check BACKUP_TARGET / SHOPWARE_SSH_KEY."
         )));
     }
     Ok(())
@@ -312,7 +315,7 @@ mod tests {
             "COMPOSE_DIR".into(),
             shop.path().to_string_lossy().into_owned(),
         );
-        ShopEnv::load_backup(shop.path().to_path_buf(), &process).unwrap()
+        ShopEnv::load(shop.path().to_path_buf(), &process).unwrap()
     }
 
     #[test]
@@ -350,7 +353,6 @@ mod tests {
         let shop = TempShop::new("live");
         shop.write_min("live");
         let mut env = env_for(&shop);
-        env.set("SYNC_ALLOW_LIVE_RESTORE", "1");
         let err = restore_from_args(
             &args(Some("20260912T020000Z"), true, true, Some("db")),
             &mut env,
@@ -358,7 +360,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.to_string().contains("BACKUP_ALLOW_LIVE_RESTORE"),
+            err.to_string().contains("SHOPWARE_ALLOW_LIVE_RESTORE"),
             "{err}"
         );
         assert!(err.to_string().contains("live"), "{err}");

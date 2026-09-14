@@ -1,7 +1,7 @@
-//! Opt-in sales-channel URL rewrite after restore.
+//! Sales-channel URL rewrite after restore.
 //!
-//! Overlay bash keeps “requested?” and live-refuse. The rewrite itself is
-//! `bin/console fyrst:sales-channel:rewrite-urls` via compose `web` — not SQL.
+//! Target URL is `APP_URL`. On live, rewrite is skipped (APP_URL is a shop
+//! runtime var, not a restore opt-in — refusing it would block live DR).
 
 use super::env::{existing_compose_files, ShopEnv};
 use super::error::Error;
@@ -10,35 +10,39 @@ use super::mysql::{compose_argv, compose_cli_log, require_docker};
 use std::path::Path;
 use std::process::Command;
 
-pub fn rewrite_requested(env: &ShopEnv) -> bool {
-    env.get("SYNC_REWRITE_APP_URL").is_some() || env.get("SYNC_REWRITE_URL_MAP").is_some()
+pub fn rewrite_app_url(env: &ShopEnv) -> Option<&str> {
+    env.get("APP_URL")
 }
 
-/// Hard refuse rewrite on a live consumer. `SYNC_ALLOW_LIVE_RESTORE=1` does not bypass this.
+pub fn rewrite_requested(env: &ShopEnv) -> bool {
+    rewrite_app_url(env).is_some()
+}
+
+/// Rewrite never runs on live. Returns Ok so restore/DR can continue.
 pub fn assert_not_live_rewrite(signals: &LiveSignals) -> Result<(), Error> {
     if !signals.is_live() {
         return Ok(());
     }
-    Err(Error::fail(format!(
-        "Refusing sales-channel domain rewrite on a live host (SYNC_ENV={}, SHOPWARE_DEPLOY_ENV={}). Unset SYNC_REWRITE_APP_URL / SYNC_REWRITE_URL_MAP. Rewrite is never allowed on live (SYNC_ALLOW_LIVE_RESTORE=1 does not bypass this).",
-        signals.sync_env.as_deref().unwrap_or("unset"),
-        signals.deploy_env.as_deref().unwrap_or("unset"),
-    )))
+    Ok(())
+}
+
+pub fn should_rewrite(env: &ShopEnv, signals: &LiveSignals) -> bool {
+    rewrite_requested(env) && !signals.is_live()
 }
 
 pub fn console_flag_args(env: &ShopEnv, checkout: &str, dry_run: bool) -> Vec<String> {
     let mut args = Vec::new();
-    if let Some(url) = env.get("SYNC_REWRITE_APP_URL") {
+    if let Some(url) = rewrite_app_url(env) {
         args.push(format!("--app-url={url}"));
-    }
-    if let Some(map) = env.get("SYNC_REWRITE_URL_MAP") {
-        args.push(format!("--map={map}"));
     }
     args.push(format!(
         "--deploy-env={}",
         env.get("SHOPWARE_DEPLOY_ENV").unwrap_or("")
     ));
-    args.push(format!("--sync-env={}", env.get("SYNC_ENV").unwrap_or("")));
+    args.push(format!(
+        "--sync-env={}",
+        env.get("SHOPWARE_DEPLOY_ENV").unwrap_or("")
+    ));
     args.push(format!("--checkout-basename={checkout}"));
     if dry_run {
         args.push("--dry-run".into());
@@ -86,7 +90,11 @@ pub fn assert_not_live(signals: &LiveSignals) -> Result<(), Error> {
 }
 
 pub fn skip_without_db_log() -> &'static str {
-    "SYNC_REWRITE_APP_URL / SYNC_REWRITE_URL_MAP set but db was skipped — not rewriting sales_channel_domain"
+    "APP_URL set but db was skipped — not rewriting sales_channel_domain"
+}
+
+pub fn skip_live_log() -> &'static str {
+    "Skipping sales-channel domain rewrite on a live host (rewrite is never applied on live)"
 }
 
 pub fn maybe_rewrite(
@@ -97,16 +105,19 @@ pub fn maybe_rewrite(
     want_db_restored: bool,
     dry_run: bool,
 ) -> Result<(), Error> {
-    if !requested(env) {
+    if !rewrite_requested(env) {
         return Ok(());
     }
-    assert_not_live(signals)?;
+    if signals.is_live() {
+        println!("==> {}", skip_live_log());
+        return Ok(());
+    }
     if !want_db_restored {
         println!("==> {}", skip_without_db_log());
         return Ok(());
     }
     println!(
-        "==> Opt-in sales_channel_domain rewrite via fyrst:sales-channel:rewrite-urls (sales channel domains only; media CDN / plugin configs / payment webhooks are not updated)"
+        "==> Sales_channel_domain rewrite via fyrst:sales-channel:rewrite-urls from APP_URL (sales channel domains only; media CDN / plugin configs / payment webhooks are not updated)"
     );
     if files.is_empty() {
         return Err(Error::fail(
@@ -164,24 +175,19 @@ mod tests {
     }
 
     #[test]
-    fn requested_only_when_url_or_map_set() {
+    fn requested_only_when_app_url_set() {
         assert!(!rewrite_requested(&env_from(&[])));
         assert!(rewrite_requested(&env_from(&[(
-            "SYNC_REWRITE_APP_URL",
+            "APP_URL",
             "https://staging.example.com"
-        )])));
-        assert!(rewrite_requested(&env_from(&[(
-            "SYNC_REWRITE_URL_MAP",
-            "https://shop.example.com=https://staging.example.com"
         )])));
     }
 
     #[test]
     fn console_args_omit_dry_run_when_off() {
         let env = env_from(&[
-            ("SYNC_REWRITE_APP_URL", "https://staging.example.com"),
+            ("APP_URL", "https://staging.example.com"),
             ("SHOPWARE_DEPLOY_ENV", "staging"),
-            ("SYNC_ENV", "staging"),
         ]);
         let args = console_flag_args(&env, "acme-staging", false);
         let joined = args.join(" ");
@@ -200,24 +206,20 @@ mod tests {
     }
 
     #[test]
-    fn console_args_add_dry_run_and_map() {
-        let env = env_from(&[(
-            "SYNC_REWRITE_URL_MAP",
-            "https://shop.example.com=https://staging.example.com",
-        )]);
+    fn console_args_add_dry_run() {
+        let env = env_from(&[("APP_URL", "https://staging.example.com")]);
         let args = console_flag_args(&env, "acme-staging", true);
         let joined = args.join(" ");
         assert!(args.iter().any(|a| a == "--dry-run"), "{joined}");
         assert!(
-            joined.contains("--map=https://shop.example.com=https://staging.example.com"),
+            joined.contains("--app-url=https://staging.example.com"),
             "{joined}"
         );
-        assert!(!joined.contains("--app-url="), "{joined}");
     }
 
     #[test]
     fn compose_line_is_console_not_sql() {
-        let env = env_from(&[("SYNC_REWRITE_APP_URL", "https://staging.example.com")]);
+        let env = env_from(&[("APP_URL", "https://staging.example.com")]);
         let line = rewrite_log_line(&env, Path::new("/shops/acme-staging"), true);
         assert!(line.contains("fyrst:sales-channel:rewrite-urls"), "{line}");
         assert!(
@@ -235,32 +237,22 @@ mod tests {
     }
 
     #[test]
-    fn live_rewrite_refused_even_when_restore_allowed() {
+    fn live_skips_rewrite_so_dr_can_continue() {
         let signals = LiveSignals {
-            sync_env: Some("live".into()),
             deploy_env: Some("live".into()),
             shop_basename: "acme-live".into(),
             hostname_short: Some("vps-1".into()),
             allow_env: true,
         };
-        let err = assert_not_live_rewrite(&signals).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Refusing sales-channel domain rewrite on a live host"),
-            "{err}"
-        );
-        assert!(
-            err.to_string()
-                .contains("SYNC_ALLOW_LIVE_RESTORE=1 does not bypass"),
-            "{err}"
-        );
+        assert!(assert_not_live_rewrite(&signals).is_ok());
+        let env = env_from(&[("APP_URL", "https://shop.example.com")]);
+        assert!(!should_rewrite(&env, &signals));
         let staging = LiveSignals {
-            sync_env: Some("staging".into()),
             deploy_env: Some("staging".into()),
             shop_basename: "acme-staging".into(),
             hostname_short: Some("vps-1".into()),
             allow_env: false,
         };
-        assert!(assert_not_live_rewrite(&staging).is_ok());
+        assert!(should_rewrite(&env, &staging));
     }
 }

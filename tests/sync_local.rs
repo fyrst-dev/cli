@@ -54,7 +54,6 @@ impl TempShop {
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=dev
 SHOPWARE_DATA_ROOT=/var/lib/shopware/data/acme/dev
-SYNC_DATA_ROOT=/var/lib/shopware/data/acme/dev
 ",
         )
         .unwrap();
@@ -74,6 +73,10 @@ const LEAK_KEYS: &[&str] = &[
     "SHOPWARE_DEPLOY_ENV",
     "SHOPWARE_DATA_ROOT",
     "SHOPWARE_DATA_BASE",
+    "SHOPWARE_SSH_HOST",
+    "SHOPWARE_SSH_USER",
+    "SHOPWARE_SSH_KEY",
+    "SHOPWARE_REMOTE_DATA_ROOT",
     "SYNC_ENV",
     "SYNC_SOURCE_ENV",
     "SYNC_REMOTE_DATA_ROOT",

@@ -43,8 +43,7 @@ pub fn run_with_env(
 ) -> Result<(), Error> {
     let compose_dir = resolve_compose_dir(process_env, cwd)?;
     let compose_dir = fs::canonicalize(&compose_dir).unwrap_or(compose_dir);
-    let mut env = ShopEnv::load(compose_dir.clone(), process_env)?;
-    env.load_backup_overlay(process_env)?;
+    let env = ShopEnv::load(compose_dir.clone(), process_env)?;
 
     let shop_id = require_shop_id(&env)?;
     let deploy_env = require_deploy_env(&env)?;
@@ -52,9 +51,11 @@ pub fn run_with_env(
     let (project_name, _derived) = derive_project_name(&env)?;
     let (data_root, data_root_derived) = resolve_backup_data_root(&env, &shop_id, &deploy_env);
 
-    let raw_target = env.get("BACKUP_TARGET").unwrap_or("").to_string();
-    let ssh_port = env.get("BACKUP_SSH_PORT").unwrap_or("22");
-    let mut target = parse_backup_target(&raw_target, ssh_port)?;
+    let raw_target = env
+        .get("BACKUP_TARGET")
+        .unwrap_or(super::env::DEFAULT_BACKUP_TARGET)
+        .to_string();
+    let mut target = parse_backup_target(&raw_target, "22")?;
     if let BackupTarget::Local { path } = &target {
         target = BackupTarget::Local {
             path: resolve_local_target_path(path, &compose_dir),
@@ -62,12 +63,9 @@ pub fn run_with_env(
     }
 
     let keep_days = prune::parse_keep_days(env.get("BACKUP_KEEP_DAYS"))?;
-    let ssh_key = env.get("BACKUP_SSH_KEY").map(PathBuf::from);
+    let ssh_key = env.get("SHOPWARE_SSH_KEY").map(PathBuf::from);
     let db_dump = env.get("BACKUP_DB_DUMP").map(PathBuf::from);
-    let archive_image = env
-        .get("SYNC_ARCHIVE_IMAGE")
-        .unwrap_or(DEFAULT_ARCHIVE_IMAGE)
-        .to_string();
+    let archive_image = DEFAULT_ARCHIVE_IMAGE.to_string();
     let now_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -486,7 +484,7 @@ fn probe_ssh(ctx: &BackupCtx) -> Result<(), Error> {
         .map_err(|e| Error::fail(format!("could not exec ssh: {e}")))?;
     if !status.success() {
         return Err(Error::fail(format!(
-            "SSH to {dest} failed (BatchMode). Check BACKUP_TARGET / BACKUP_SSH_KEY."
+            "SSH to {dest} failed (BatchMode). Check BACKUP_TARGET / SHOPWARE_SSH_KEY."
         )));
     }
     Ok(())
@@ -610,17 +608,15 @@ mod tests {
     }
 
     #[test]
-    fn missing_backup_target_fails_clearly() {
+    fn default_backup_target_is_local() {
         let shop = TempShop::new("no-tgt");
         shop.write_shop("live");
-        let err = run_with_env(
+        run_with_env(
             &args(Some("media"), true),
             &process(shop.path(), &[]),
             shop.path(),
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("BACKUP_TARGET"), "{err}");
-        assert!(!err.to_string().contains("not implemented"), "{err}");
+        .unwrap();
     }
 
     #[test]

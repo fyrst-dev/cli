@@ -1,9 +1,9 @@
-//! SSH source resolution for remote `--from` (recipes `deploy/lib/sync-ssh.sh`).
+//! SSH source resolution for remote `--from`.
 //!
-//! Used by `shopware sync capture` to rsync bind-mount trees. Never used to
-//! run `shopware-cli project dump` on the remote.
+//! Host / user / key come from `SHOPWARE_SSH_*`. Host defaults to the
+//! `--from` alias (`live` → `~/.ssh/config` `Host live`) when unset.
 
-use super::env::{derived_data_root, require_cmd, source_env_for_remote, ShopEnv};
+use super::env::{remote_data_root, require_cmd, require_shop_id, ShopEnv};
 use super::error::Error;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -16,9 +16,8 @@ pub struct SshSource {
     pub user: Option<String>,
     pub port: String,
     pub key: Option<String>,
-    pub remote_path: String,
+    pub remote_path: Option<String>,
     pub target: String,
-    /// Set when `SYNC_<ALIAS>_DATA_ROOT` or `SYNC_REMOTE_DATA_ROOT` is present.
     pub remote_data_root: Option<PathBuf>,
 }
 
@@ -35,41 +34,31 @@ pub fn alias_key(alias: &str) -> String {
         .collect()
 }
 
-pub fn pick_alias_env(env: &ShopEnv, alias: &str, suffix: &str) -> Option<String> {
-    let key = alias_key(alias);
-    let specific = format!("SYNC_{key}_{suffix}");
-    if let Some(v) = env.get(&specific) {
-        return Some(v.to_string());
-    }
-    env.get(&format!("SYNC_{suffix}")).map(str::to_string)
-}
-
 pub fn posix_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-pub fn resolve_ssh_source(from: &str, env: &ShopEnv) -> Result<SshSource, Error> {
-    let key = alias_key(from);
-    let host = pick_alias_env(env, from, "SSH_HOST").unwrap_or_else(|| from.to_string());
-    let user = pick_alias_env(env, from, "SSH_USER");
-    let port = pick_alias_env(env, from, "SSH_PORT").unwrap_or_else(|| "22".into());
-    let keyfile = pick_alias_env(env, from, "SSH_KEY");
-    if let Some(k) = &keyfile {
-        if !Path::new(k).is_file() {
-            return Err(Error::fail(format!("SYNC_SSH_KEY not found: {k}")));
-        }
+fn resolve_keyfile(env: &ShopEnv) -> Result<Option<String>, Error> {
+    let Some(k) = env.get("SHOPWARE_SSH_KEY") else {
+        return Ok(None);
+    };
+    let p = Path::new(k);
+    let resolved = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        env.compose_dir.join(p)
+    };
+    if !resolved.is_file() {
+        return Err(Error::fail(format!("SHOPWARE_SSH_KEY not found: {k}")));
     }
-    let remote_path = pick_alias_env(env, from, "REMOTE_PATH").ok_or_else(|| {
-        Error::fail(format!(
-            "SYNC_REMOTE_PATH (or SYNC_{key}_REMOTE_PATH) is required for --from {from}. Set it in deploy/sync.env (see deploy/sync.env.example)."
-        ))
-    })?;
+    Ok(Some(resolved.to_string_lossy().into_owned()))
+}
 
-    let specific_dr = format!("SYNC_{key}_DATA_ROOT");
-    let remote_data_root = env
-        .get(&specific_dr)
-        .or_else(|| env.get("SYNC_REMOTE_DATA_ROOT"))
-        .map(PathBuf::from);
+pub fn resolve_ssh_source(from: &str, env: &ShopEnv) -> Result<SshSource, Error> {
+    let host = env.get("SHOPWARE_SSH_HOST").unwrap_or(from).to_string();
+    let user = env.get("SHOPWARE_SSH_USER").map(str::to_string);
+    let keyfile = resolve_keyfile(env)?;
+    let remote_data = env.get("SHOPWARE_REMOTE_DATA_ROOT").map(PathBuf::from);
 
     let target = match user.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(u) => format!("{u}@{host}"),
@@ -80,15 +69,15 @@ pub fn resolve_ssh_source(from: &str, env: &ShopEnv) -> Result<SshSource, Error>
         alias: from.to_string(),
         host,
         user,
-        port,
+        port: "22".into(),
         key: keyfile,
-        remote_path,
+        remote_path: None,
         target,
-        remote_data_root,
+        remote_data_root: remote_data,
     })
 }
 
-/// `ssh` flags without the target (BatchMode; recipes `sync_init_ssh_cmd`).
+/// `ssh` flags without the target (BatchMode).
 pub fn ssh_flags(src: &SshSource) -> Vec<String> {
     let mut a = vec![
         "-o".into(),
@@ -111,6 +100,12 @@ pub fn ssh_e_opt(src: &SshSource) -> String {
     parts.join(" ")
 }
 
+pub fn ssh_argv_vec(src: &SshSource) -> Vec<String> {
+    let mut cmd = vec!["ssh".to_string()];
+    cmd.extend(ssh_flags(src));
+    cmd
+}
+
 pub fn probe_ssh_dry_run_line(src: &SshSource) -> String {
     format!(
         "DRY-RUN ssh {} {} true",
@@ -131,8 +126,8 @@ pub fn probe_ssh(src: &SshSource) -> Result<(), Error> {
         .map_err(|e| Error::fail(format!("could not exec ssh: {e}")))?;
     if !status.success() {
         return Err(Error::fail(format!(
-            "SSH to {} failed (BatchMode, no password prompts). Check SYNC_SSH_HOST/USER/PORT/KEY and known_hosts.",
-            src.target
+            "SSH to {} failed (BatchMode, no password prompts). Check Host {} in ~/.ssh/config, SHOPWARE_SSH_HOST/USER/KEY, and known_hosts.",
+            src.target, src.alias
         )));
     }
     Ok(())
@@ -140,11 +135,19 @@ pub fn probe_ssh(src: &SshSource) -> Result<(), Error> {
 
 pub fn spawn_remote_bash(src: &SshSource, remote_body: &str) -> Result<Child, Error> {
     require_cmd("ssh")?;
-    let payload = format!(
-        "set -euo pipefail\ncd {cd}\nif [[ -f .env ]]; then set -a; source .env; set +a; fi\nif [[ -f .env.prod ]]; then set -a; source .env.prod; set +a; fi\nexport IMAGE=\"${{IMAGE:-}}\" IMAGE_TAG=\"${{IMAGE_TAG:-latest}}\"\n{body}\n",
-        cd = posix_quote(&src.remote_path),
-        body = remote_body,
-    );
+    let payload = match src
+        .remote_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(path) => format!(
+            "set -euo pipefail\ncd {cd}\nif [[ -f .env ]]; then set -a; source .env; set +a; fi\nif [[ -f .env.prod ]]; then set -a; source .env.prod; set +a; fi\nexport IMAGE=\"${{IMAGE:-}}\" IMAGE_TAG=\"${{IMAGE_TAG:-latest}}\"\n{body}\n",
+            cd = posix_quote(path),
+            body = remote_body,
+        ),
+        None => format!("set -euo pipefail\n{remote_body}\n"),
+    };
     let mut child = Command::new("ssh")
         .args(ssh_flags(src))
         .arg(&src.target)
@@ -178,7 +181,7 @@ pub fn remote_dir_exists(src: &SshSource, path: &Path) -> Result<bool, Error> {
     Ok(out.status.success())
 }
 
-/// Probe `SYNC_DATA_ROOT` / `SHOPWARE_DATA_ROOT` on the source, else derive.
+/// `SHOPWARE_REMOTE_DATA_ROOT`, else `{data_base}/{shop_id}/live`.
 pub fn resolve_remote_data_root(
     src: &SshSource,
     env: &ShopEnv,
@@ -189,43 +192,18 @@ pub fn resolve_remote_data_root(
     if let Some(p) = &src.remote_data_root {
         return Ok((p.clone(), logs));
     }
-    let source_env = source_env_for_remote(&src.alias, env);
+    let derived = remote_data_root(env, shop_id);
     if dry_run {
-        let derived = derived_data_root(env, shop_id, &source_env);
         logs.push(format!(
-            "DRY-RUN remote SHOPWARE_DATA_ROOT derived {} (probe skipped)",
+            "DRY-RUN remote data root derived {} (probe skipped)",
             derived.display()
         ));
-        return Ok((derived, logs));
+    } else {
+        logs.push(format!(
+            "Remote bind-mount root derived: {} (shop={shop_id} env=live)",
+            derived.display()
+        ));
     }
-    let out = remote_bash(
-        src,
-        r#"printf %s "${SYNC_DATA_ROOT:-${SHOPWARE_DATA_ROOT:-}}""#,
-    )?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(Error::fail(format!(
-            "SSH probe of remote data root on {} failed: {err}",
-            src.target
-        )));
-    }
-    let probed = String::from_utf8_lossy(&out.stdout);
-    let probed = probed
-        .trim()
-        .trim_end_matches('\r')
-        .lines()
-        .next_back()
-        .unwrap_or("")
-        .trim();
-    if !probed.is_empty() {
-        logs.push(format!("Remote bind-mount root: {probed}"));
-        return Ok((PathBuf::from(probed), logs));
-    }
-    let derived = derived_data_root(env, shop_id, &source_env);
-    logs.push(format!(
-        "Remote bind-mount root derived: {} (shop={shop_id} env={source_env})",
-        derived.display()
-    ));
     Ok((derived, logs))
 }
 
@@ -234,14 +212,16 @@ pub fn resolve_remote_project_name(
     env: &ShopEnv,
     shop_id: &str,
 ) -> Result<String, Error> {
-    let out = remote_bash(src, r#"printf %s "${COMPOSE_PROJECT_NAME:-}""#)?;
-    let n = String::from_utf8_lossy(&out.stdout);
-    let n = n.trim().trim_matches('"').trim();
-    if !n.is_empty() {
-        return Ok(n.to_string());
+    if src.remote_path.is_some() {
+        let out = remote_bash(src, r#"printf %s "${COMPOSE_PROJECT_NAME:-}""#)?;
+        let n = String::from_utf8_lossy(&out.stdout);
+        let n = n.trim().trim_matches('"').trim();
+        if !n.is_empty() {
+            return Ok(n.to_string());
+        }
     }
-    let source_env = source_env_for_remote(&src.alias, env);
-    Ok(format!("{shop_id}-{source_env}"))
+    let _ = require_shop_id(env);
+    Ok(format!("{shop_id}-live"))
 }
 
 #[cfg(test)]
@@ -264,23 +244,28 @@ mod tests {
     }
 
     #[test]
-    fn resolve_requires_remote_path() {
+    fn host_defaults_to_from_alias() {
         let env = env_with(&[("SHOPWARE_SHOP_ID", "acme")]);
-        let err = resolve_ssh_source("live", &env).unwrap_err();
-        assert!(err.to_string().contains("SYNC_REMOTE_PATH"), "{err}");
+        let src = resolve_ssh_source("live", &env).unwrap();
+        assert_eq!(src.host, "live");
+        assert_eq!(src.target, "live");
+        assert_eq!(src.port, "22");
+        assert!(src.remote_path.is_none());
+        assert!(src.remote_data_root.is_none());
     }
 
     #[test]
-    fn alias_specific_remote_path_and_target() {
+    fn shopware_ssh_trio() {
         let env = env_with(&[
-            ("SYNC_LIVE_REMOTE_PATH", "/opt/shopware/acme"),
-            ("SYNC_LIVE_SSH_USER", "deploy"),
-            ("SYNC_LIVE_SSH_HOST", "vps.example"),
-            ("SYNC_LIVE_DATA_ROOT", "/var/lib/shopware/data/acme/live"),
+            ("SHOPWARE_SSH_HOST", "vps.example"),
+            ("SHOPWARE_SSH_USER", "deploy"),
+            (
+                "SHOPWARE_REMOTE_DATA_ROOT",
+                "/var/lib/shopware/data/acme/live",
+            ),
         ]);
         let src = resolve_ssh_source("live", &env).unwrap();
         assert_eq!(src.target, "deploy@vps.example");
-        assert_eq!(src.remote_path, "/opt/shopware/acme");
         assert_eq!(
             src.remote_data_root.as_deref(),
             Some(Path::new("/var/lib/shopware/data/acme/live"))

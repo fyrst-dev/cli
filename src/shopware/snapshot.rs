@@ -29,7 +29,6 @@ pub struct SnapshotPlan {
     pub source_is_local: bool,
     pub shop_id: String,
     pub deploy_env: Option<String>,
-    pub sync_env: Option<String>,
     pub project: Option<String>,
     pub data_root: PathBuf,
     pub remote_data_root: Option<PathBuf>,
@@ -140,7 +139,6 @@ pub fn plan(
         source_is_local,
         shop_id,
         deploy_env: env.get("SHOPWARE_DEPLOY_ENV").map(str::to_string),
-        sync_env: env.get("SYNC_ENV").map(str::to_string),
         project,
         data_root,
         remote_data_root,
@@ -157,23 +155,19 @@ pub fn plan(
 
 pub fn execute(plan: &SnapshotPlan) -> Result<(), Error> {
     println!(
-        "==> Runtime data snapshot  from={}  data={}  shop={}  deploy_env={}  project={}  env={}  data_root={}  snapshot_dir={}  compose_dir={}  dry-run={}",
+        "==> Runtime data snapshot  from={}  data={}  shop={}  deploy_env={}  project={}  data_root={}  snapshot_dir={}  compose_dir={}  dry-run={}",
         plan.from,
         plan.selection.items_csv(),
         plan.shop_id,
         plan.deploy_env.as_deref().unwrap_or("unset"),
         plan.project.as_deref().unwrap_or(""),
-        plan.sync_env.as_deref().unwrap_or("unset"),
         plan.data_root.display(),
         plan.snapshot_dir.display(),
         plan.compose_dir.display(),
         if plan.dry_run { 1 } else { 0 },
     );
     if let Some(ssh) = &plan.ssh {
-        println!(
-            "==> SSH {} port {}  remote={}",
-            ssh.target, ssh.port, ssh.remote_path
-        );
+        println!("==> SSH {} port {}", ssh.target, ssh.port);
     }
     for line in &plan.extra_logs {
         println!("==> {line}");
@@ -253,7 +247,7 @@ created={created}\n\
 source_alias={from}\n\
 source_local={local}\n\
 source_host={source_host}\n\
-consumer_sync_env={sync_env}\n\
+consumer_deploy_env={deploy_env}\n\
 compose_dir={compose}\n\
 project={project}\n\
 data={data}\n\
@@ -264,7 +258,7 @@ dump=operator-run shopware-cli project dump (fyrst-cli does not dump)\n\
 object_storage=out-of-scope\n",
         from = plan.from,
         local = if plan.source_is_local { "1" } else { "0" },
-        sync_env = plan.sync_env.as_deref().unwrap_or(""),
+        deploy_env = plan.deploy_env.as_deref().unwrap_or(""),
         compose = plan.compose_dir.display(),
         project = plan.project.as_deref().unwrap_or(""),
         data = plan.selection.items_csv(),
@@ -438,8 +432,8 @@ mod tests {
         let shop = TempShop::new("ssh");
         shop.write_min();
         fs::write(
-            shop.path().join("deploy/sync.env"),
-            "SYNC_REMOTE_PATH=/opt/shopware/acme\nSYNC_REMOTE_DATA_ROOT=/var/lib/shopware/data/acme/live\n",
+            shop.path().join(".env.local"),
+            "SHOPWARE_REMOTE_DATA_ROOT=/var/lib/shopware/data/acme/live\n",
         )
         .unwrap();
         let p = plan(

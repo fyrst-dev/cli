@@ -148,10 +148,7 @@ fn parse_host_port(hp: &str) -> (String, String) {
     (hp.to_string(), "3306".into())
 }
 
-pub fn client_image_for_url(scheme: &str, env: &ShopEnv) -> String {
-    if let Some(img) = env.get("SYNC_MYSQL_CLIENT_IMAGE") {
-        return img.to_string();
-    }
+pub fn client_image_for_url(scheme: &str, _env: &ShopEnv) -> String {
     if scheme.eq_ignore_ascii_case("mariadb") {
         DEFAULT_MARIADB_CLIENT_IMAGE.to_string()
     } else {
@@ -357,8 +354,11 @@ mod tests {
             client_image_for_url("mariadb", &env),
             DEFAULT_MARIADB_CLIENT_IMAGE
         );
-        let env = env_from(&[("SYNC_MYSQL_CLIENT_IMAGE", "mysql:8.0")]);
-        assert_eq!(client_image_for_url("mariadb", &env), "mysql:8.0");
+        let env = env_from(&[("SHOPWARE_SHOP_ID", "acme")]);
+        assert_eq!(
+            client_image_for_url("mariadb", &env),
+            DEFAULT_MARIADB_CLIENT_IMAGE
+        );
     }
 
     #[test]
