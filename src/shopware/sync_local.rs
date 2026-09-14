@@ -113,18 +113,6 @@ pub fn rsync_opts(delete: bool) -> Vec<&'static str> {
     opts
 }
 
-pub fn alias_key(from: &str) -> String {
-    from.chars()
-        .map(|c| {
-            if c == '-' {
-                '_'
-            } else {
-                c.to_ascii_uppercase()
-            }
-        })
-        .collect()
-}
-
 pub fn normalize_sync_local_data(spec: Option<&str>) -> Result<Vec<String>, Error> {
     let spec = spec.map(str::trim).filter(|s| !s.is_empty());
     let spec = match spec {
@@ -600,12 +588,6 @@ mod tests {
         let on = rsync_opts(true);
         assert_eq!(on, vec!["-azH", "--delete"]);
         assert!(!on.contains(&"--numeric-ids"));
-    }
-
-    #[test]
-    fn alias_key_uppercases_and_hyphens() {
-        assert_eq!(alias_key("live"), "LIVE");
-        assert_eq!(alias_key("staging-vps"), "STAGING_VPS");
     }
 
     #[test]

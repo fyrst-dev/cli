@@ -385,11 +385,6 @@ pub fn remote_data_root(env: &ShopEnv, shop_id: &str) -> PathBuf {
     derived_data_root(env, shop_id, DEFAULT_REMOTE_ENV)
 }
 
-/// Remote env directory for derived live data (`live`).
-pub fn source_env_for_remote(_from: &str, _env: &ShopEnv) -> String {
-    DEFAULT_REMOTE_ENV.to_string()
-}
-
 pub fn have_cmd(name: &str) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
         return false;
@@ -778,7 +773,6 @@ COMPOSE_PROFILES=redis
             remote_data_root(&env, "acme"),
             PathBuf::from("/opt/data/acme/live")
         );
-        assert_eq!(source_env_for_remote("staging", &env), "live");
 
         let mut vars = HashMap::new();
         vars.insert("SHOPWARE_REMOTE_DATA_ROOT".into(), "/mnt/uploads".into());

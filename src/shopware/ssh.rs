@@ -21,19 +21,6 @@ pub struct SshSource {
     pub remote_data_root: Option<PathBuf>,
 }
 
-pub fn alias_key(alias: &str) -> String {
-    alias
-        .chars()
-        .map(|c| {
-            if c == '-' {
-                '_'
-            } else {
-                c.to_ascii_uppercase()
-            }
-        })
-        .collect()
-}
-
 pub fn posix_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -235,12 +222,6 @@ mod tests {
             vars.insert((*k).into(), (*v).into());
         }
         ShopEnv::from_vars(PathBuf::from("/shop"), vars)
-    }
-
-    #[test]
-    fn alias_key_uppercases_and_hyphens() {
-        assert_eq!(alias_key("live"), "LIVE");
-        assert_eq!(alias_key("my-vps"), "MY_VPS");
     }
 
     #[test]
