@@ -571,14 +571,11 @@ shop-root `.env`. Names match the overlay:
 | Sync rewrite | `SYNC_REWRITE_APP_URL`, `SYNC_REWRITE_URL_MAP`, `SYNC_APP_URL`, `SYNC_POST_RESTORE_CMD` |
 | Backup | `BACKUP_TARGET`, `BACKUP_KEEP_DAYS` (default 14, `0` = forever), `BACKUP_SSH_KEY`, `BACKUP_SSH_PORT`, `BACKUP_DB_DUMP`, `BACKUP_ALLOW_LIVE_RESTORE`, `BACKUP_CONFIRM_RESTORE` |
 
-## Future wrappers (not done here)
+## Ownership
 
-When implemented, remaining verbs should exec (or source-equivalent) the
-overlay script with the parsed argv, rather than re-coding rewrite / rsync in
-Rust. `sync apply` volumes/orchestration already match the overlay in this
-CLI (rsync + compose `web` console rewrite); do not reimplement rewrite in SQL.
-`db import`, `sync local`, and `sync pull` are in-process (MySQL client; rsync/ssh).
-Recipe and `shopware-cd` product code stay out of this repo. Recipe bash
-wrappers are **not** switched to `fyrst-cli` in this change. Dump remains
-shopware-cli even after wrappers land. Rollback reuses the release
-compose/rollout helper.
+The six overlay scripts are implemented in-process in this CLI. Dump remains
+`shopware-cli project dump` forever — fyrst-cli does not dump, wrap dump, or
+shell out to shopware-cli. Recipe and `shopware-cd` product code stay out of
+this repo. Recipe bash is not switched to `fyrst-cli` in this change. Do not
+reimplement rewrite in SQL; `sync apply` calls compose `web` console.
+Rollback reuses the release compose/rollout helper.

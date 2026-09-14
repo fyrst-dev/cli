@@ -22,6 +22,30 @@ fn run(args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn version_matches_crate() {
+    let out = run(&["--version"]);
+    assert!(
+        out.status.success(),
+        "fyrst-cli --version failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let expected = env!("CARGO_PKG_VERSION");
+    assert!(
+        text.contains(expected),
+        "--version missing crate version {expected}: {text}"
+    );
+    assert!(
+        !text.contains("0.0.0"),
+        "--version still reports placeholder 0.0.0: {text}"
+    );
+}
+
+#[test]
 fn shopware_help_prints_command_tree() {
     let help = stdout(&["shopware", "--help"]);
     for needle in [
