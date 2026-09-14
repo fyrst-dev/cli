@@ -1,8 +1,10 @@
 # ADR 0001: Shopware CD lives under `fyrst-cli shopware`
 
 - Status: Accepted (namespace, dump/import split, live guards).
-  Command **names** superseded by [ADR-0002](ADR-0002-shopware-lifecycle-regroup.md).
+  Dump ownership is **permanent**. Command **names** superseded by
+  [ADR-0002](ADR-0002-shopware-lifecycle-regroup.md).
 - Date: 2026-09-13
+- Updated: 2026-09-14 (dump ownership locked; overlay verbs in-process)
 
 ## Context
 
@@ -24,9 +26,9 @@ Those scripts already call other tools:
 
 - **DB dump:** `shopware-cli project dump` (one-shot
   `ghcr.io/shopware/shopware-cli` on the Compose network). Escape hatch:
-  `SYNC_DUMP_ENGINE=mysqldump`. **Dump is owned completely by upstream
-  shopware-cli.** fyrst-cli must not provide a dump command and must not
-  wrap or orchestrate dump as a first-class feature.
+  `SYNC_DUMP_ENGINE=mysqldump`. **Dump is owned completely and permanently
+  by upstream shopware-cli.** fyrst-cli must never provide a dump command,
+  never wrap dump, and never shell out to `shopware-cli project dump`.
 - **DB restore / import:** MySQL/MariaDB client import (`gzip -dc` piped into
   `mysql`/`mariadb`). **shopware-cli is dump-only; it has no import.** That
   gap is what fyrst-cli implements.
@@ -38,8 +40,10 @@ Those scripts already call other tools:
 
 `fyrst-dev/recipes` and `fyrst-dev/shopware-cd` stay the product sources for
 those scripts and the console command. This CLI does not become a second
-implementation of dump, compose rollout, or rewrite-urls. It *does* call
-the MySQL client for import, because no upstream CLI command exists.
+implementation of dump or of `fyrst:sales-channel:rewrite-urls`. It *does*
+implement the six overlay operator verbs in-process (including compose
+rollout) and it *does* call the MySQL client for import, because no upstream
+CLI command exists.
 
 ## Decision
 
@@ -62,10 +66,11 @@ the MySQL client for import, because no upstream CLI command exists.
    Overlay script *files* are unchanged (out of scope for the CLI regroup).
    Old clap paths are a hard cut (no aliases).
 
-3. **Dump vs import split:**
-   - **Dump = shopware-cli only.** Operators run `shopware-cli project dump`
-     (or the Flex overlay). fyrst-cli `sync capture` does not dump, does not
-     shell out to shopware-cli, and tells the operator to use shopware-cli.
+3. **Dump vs import split (permanent):**
+   - **Dump = shopware-cli forever.** Operators run `shopware-cli project dump`
+     (or the Flex overlay). fyrst-cli never dumps, never wraps dump, and never
+     shells out to `shopware-cli project dump`. `sync capture` does not dump
+     and tells the operator to use shopware-cli.
    - **Import = fyrst-cli.** `fyrst-cli shopware db import --file
      <path.sql|.sql.gz>` is the implemented path. `shopware sync apply`
      with `--data db` calls the same import module (`db.sql.gz` / `db.sql`
@@ -90,17 +95,20 @@ the MySQL client for import, because no upstream CLI command exists.
    needs `BACKUP_ALLOW_LIVE_RESTORE=1`. Inner apply sets
    `SYNC_ALLOW_LIVE_RESTORE=1` and reuses the sync apply module (db import +
    bind-mount apply from artifact layout). fyrst-cli does not dump.
-7. **Thin wrappers (future):** remaining verbs may invoke matching recipe
-   scripts. **Rollback** is implemented in this CLI (same compose files and
-   `vps_rollout` order as `deploy/vps-rollback.sh`; `IMAGE_TAG` only from
-   `.previous-tag`). The Rust layer owns clap, exit codes, and `COMPOSE_DIR`
-   discovery. It still does not wrap dump.
+7. **In-process overlay verbs:** the six overlay scripts are implemented in
+   this CLI (clap, exit codes, `COMPOSE_DIR` discovery, compose / rsync /
+   import). fyrst-cli does not exec those scripts and does not wrap dump.
+   Overlay script *files* remain the product source in recipes.
+   **Rollback** uses the same compose files and `vps_rollout` order as
+   `deploy/vps-rollback.sh`; `IMAGE_TAG` only from `.previous-tag`.
 
 ## Consequences
 
-- Operators dump with shopware-cli and import with fyrst-cli.
-- Recipe and `shopware-cd` product code stay unchanged. Wrappers, when
-  written, are expected to live in this repo and *call* those artifacts.
+- Operators dump with shopware-cli and import with fyrst-cli. That split is
+  permanent: fyrst-cli must never dump, wrap dump, or shell out to
+  `shopware-cli project dump`.
+- Recipe and `shopware-cd` product code stay unchanged. The six overlay
+  scripts are implemented in-process here.
 - Operator verbs are lifecycle groups (`env`, `deploy`, `db`, `sync`,
   `backup`). Naming of those verbs is in
   [ADR-0002](ADR-0002-shopware-lifecycle-regroup.md): `sync apply` vs
