@@ -24,14 +24,34 @@ Delegated tools:
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
 | `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync snapshot` | — | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **volumes implemented** (bind-mount trees → `--snapshot-dir/data/<item>/`; named-volume tar fallback). **Not a dump command:** `--data db` exits 2 and tells operators to run `shopware-cli project dump` |
 | `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync restore` | — | same flags | **implemented**: DB via same import module; bind-mount volumes from `data/<item>/` or `volumes/<item>.tar.gz`; stop/start `web`/`worker`/`scheduler`; opt-in rewrite via compose `web`; live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1`; rewrite never on live |
-| `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync sync` | — | same flags | **implemented** (pull orchestration): rsync remote bind-mounts; DB imports an already-present dump (does **not** dump). Live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1` |
-| `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | **implemented** (VPS → local project-dev rsync; never DB; never `SHOPWARE_DATA_ROOT`) |
-| `deploy/backup-runtime.sh` backup | `fyrst-cli shopware backup backup` | `backup` | `--data`, `--dry-run` | **implemented** (volumes + operator `db.sql.gz`; **not** a dump wrap; live allowed) |
+| `deploy/sync-runtime.sh` sync | `fyrst-cli shopware sync pull` (alias `sync sync`) | — | same flags | **implemented** (pull orchestration): rsync remote bind-mounts; DB imports an already-present dump (does **not** dump). Live refuse unless `SYNC_ALLOW_LIVE_RESTORE=1` |
+| `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync local` (alias `sync-local`) | — | `--from`, `--data`, `--remote-data-root`, `--delete`, `--dry-run` | **implemented** (VPS → local project-dev rsync; never DB; never `SHOPWARE_DATA_ROOT`; `--data all` refused) |
+| `deploy/backup-runtime.sh` backup | `fyrst-cli shopware backup create` (alias `backup backup`) | `create` | `--data`, `--dry-run` | **implemented** (volumes + operator `db.sql.gz`; **not** a dump wrap; live allowed) |
 | `deploy/backup-runtime.sh` prune | `fyrst-cli shopware backup prune` | — | `--data` (ignored; stamp-based), `--dry-run` | **implemented** (retention under `BACKUP_TARGET`; not a dump) |
-| `deploy/backup-runtime.sh` restore | `fyrst-cli shopware backup restore` | `restore` | `--data`, `--dry-run`, `--from`, `--i-understand-this-restores-this-host` | **implemented** (fetch artifact; inner apply = sync restore module; no dump) |
+| `deploy/backup-runtime.sh` restore | `fyrst-cli shopware backup restore` | `restore` | `--data`, `--dry-run`, `--artifact` (aliases `--stamp`, `--from`), `--i-understand-this-restores-this-host` | **implemented** (fetch artifact; inner apply = sync restore module; no dump) |
+
+Aliases (overlay / script parity): `sync pull` = `sync sync`;
+`backup create` = `backup backup`; `sync local` = top-level `sync-local`.
 
 `shopware sync` with no verb, `shopware backup` with no verb, and
 `shopware db` with no verb, require a subcommand (clap prints help, exit 2).
+
+## Live policy
+
+Refuse a live consumer unless the gate below is set. Three dialects on
+purpose; this table is the operator cheat-sheet (also in `shopware --help`).
+
+| Command | Gate |
+| --- | --- |
+| `db import` | `--allow-live` or `SYNC_ALLOW_LIVE_RESTORE=1` |
+| `sync restore` | `SYNC_ALLOW_LIVE_RESTORE=1` only |
+| `sync pull` (alias `sync sync`) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
+| `backup restore` | confirm flag (`--i-understand-this-restores-this-host` or `BACKUP_CONFIRM_RESTORE=1`) **and** `BACKUP_ALLOW_LIVE_RESTORE=1` when `SHOPWARE_DEPLOY_ENV=live` |
+
+`sync` moves data between environments / workdir. `backup` is off-host
+disaster recovery. Opt-in URL rewrite after restore is **never** allowed on
+live, even with `SYNC_ALLOW_LIVE_RESTORE=1`. Staging / playground / dev need no
+extra live flag for backup restore (still need confirmation).
 
 ## Exact init-env CLI
 
@@ -170,8 +190,8 @@ Rollout order reuses the release compose/rollout helper (never `--build`;
 Cron/operator pull (run on the consumer, typically staging):
 
 ```text
-fyrst-cli shopware sync sync --from live --data all
-fyrst-cli shopware sync sync --from live --skip-db --data media,files,thumbnail,theme,sitemap --dry-run
+fyrst-cli shopware sync pull --from live --data all
+fyrst-cli shopware sync pull --from live --skip-db --data media,files,thumbnail,theme,sitemap --dry-run
 ```
 
 `--from local` snapshots then restores the same host (pipeline check). Prefer
@@ -180,11 +200,11 @@ fyrst-cli shopware sync sync --from live --skip-db --data media,files,thumbnail,
 ## Exact backup restore CLI
 
 ```text
-fyrst-cli shopware backup restore [--data LIST] [--dry-run] --from STAMP_OR_DIR \
+fyrst-cli shopware backup restore [--data LIST] [--dry-run] --artifact STAMP_OR_DIR \
   --i-understand-this-restores-this-host
 ```
 
-`--from` is required (artifact timestamp under
+`--artifact` (aliases `--stamp`, `--from`) is required (artifact timestamp under
 `$BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/` or a directory path).
 Confirmation via `--i-understand-this-restores-this-host` **or**
 `BACKUP_CONFIRM_RESTORE=1`. This overwrites DB and bind mounts on **this host**.
@@ -214,7 +234,7 @@ hostname equal to `live`, case-insensitive):
 | --- | --- | --- |
 | `db import` | refuse | `--allow-live` or `SYNC_ALLOW_LIVE_RESTORE=1` |
 | `sync restore` | refuse (overlay rules) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
-| `sync sync` | refuse (overlay `assert_not_live_restore`) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
+| `sync pull` | refuse (overlay `assert_not_live_restore`) | `SYNC_ALLOW_LIVE_RESTORE=1` only |
 | opt-in rewrite after restore | refuse on live | **none** — `SYNC_ALLOW_LIVE_RESTORE=1` does not bypass |
 | `backup restore` | refuse when `SHOPWARE_DEPLOY_ENV=live` | `BACKUP_ALLOW_LIVE_RESTORE=1` (then inner apply sets `SYNC_ALLOW_LIVE_RESTORE=1`) |
 
@@ -226,11 +246,11 @@ need confirmation). Quarterly drill: restore onto staging, not live.
 Disaster recovery from a backup artifact onto this host. Overlay
 `deploy/backup-runtime.sh restore`. fyrst-cli does **not** dump.
 
-1. Require `--from` and confirmation (`--i-understand-this-restores-this-host`
+1. Require `--artifact` (aliases `--stamp`, `--from`) and confirmation (`--i-understand-this-restores-this-host`
    or `BACKUP_CONFIRM_RESTORE=1`).
 2. If `SHOPWARE_DEPLOY_ENV=live`, refuse unless `BACKUP_ALLOW_LIVE_RESTORE=1`.
 3. Fetch the artifact:
-   - `--from` directory path, or
+   - `--artifact` directory path, or
    - local `$BACKUP_TARGET/<shop>/<env>/<stamp>/`, or
    - SSH `BACKUP_TARGET`: rsync into `<shop>/var/backup-work/restore-<stamp>`.
 4. Set `SYNC_ALLOW_LIVE_RESTORE=1` and apply via the **same restore module** as
@@ -247,7 +267,7 @@ Process-env `BACKUP_*` and shop identity keys win when non-empty.
 ## `shopware sync restore` (volumes + orchestration)
 
 Applies `--snapshot-dir` onto **this host**. `--from` is unused for local
-restore (kept for clap compatibility with `sync snapshot` / `sync sync`).
+restore (kept for clap compatibility with `sync snapshot` / `sync pull`).
 
 1. Refuse a live consumer unless `SYNC_ALLOW_LIVE_RESTORE=1` (covers
    volume-only restore, not only db).
@@ -307,7 +327,7 @@ the overlay snapshot script (that would dump). Does not dump on the remote.
 
 Object storage (S3) is out of scope. Dump remains shopware-cli.
 
-## `shopware sync sync` (implemented)
+## `shopware sync pull` (implemented)
 
 Overlay `do_sync` minus dump wrap. Run on the consumer (staging / playground /
 dev). Typical cron: `--from live --data all`.
@@ -340,22 +360,24 @@ SSH env (not clap): `SYNC_SSH_HOST` (default `--from` alias), `SYNC_SSH_USER`,
 per-alias `SYNC_<ALIAS>_SSH_*` / `SYNC_<ALIAS>_DATA_ROOT`. Passwords are never
 logged.
 
-## Exact sync-local CLI
+## Exact `sync local` CLI
 
 ```text
-fyrst-cli shopware sync-local [--from ALIAS] [--data LIST] [--remote-data-root PATH] [--delete] [--dry-run]
+fyrst-cli shopware sync local [--from ALIAS] [--data LIST] [--remote-data-root PATH] [--delete] [--dry-run]
 ```
 
-## `shopware sync-local` (implemented)
+## `shopware sync local` (implemented)
 
 Pull live VPS upload trees into a **laptop `shopware-cli` project-dev**
 checkout. Matches recipes `deploy/sync-runtime-local.sh`. This command
 **never** restores the database and **never** writes into local
 `SHOPWARE_DATA_ROOT` / `SYNC_DATA_ROOT` (those are VPS bind-mount roots).
-VPS→VPS including DB is `shopware sync sync`, not this command.
+VPS→VPS including DB is `shopware sync pull`, not this command.
 
-Default `--from` is `live`. Default `--data` is
-`media,files,thumbnail,theme,sitemap` (`all` is **not** db).
+Default `--from` is `live`. Default `--data` (when omitted) is
+`media,files,thumbnail,theme,sitemap`. `--data all` is **refused** so `all`
+never implies db on this verb (on `sync pull` / `backup create`, `all`
+includes db). Alias: top-level `shopware sync-local`.
 
 Path remap (remote `$REMOTE_DATA_ROOT` → local shopware-cli project tree):
 
@@ -381,7 +403,8 @@ Path remap (remote `$REMOTE_DATA_ROOT` → local shopware-cli project tree):
    `SYNC_SSH_*` / `SYNC_<ALIAS>_SSH_*` (host falls back to `--from`).
 5. `--data db` / `database` / `mysql` is refused (dump/import separately:
    `shopware-cli project dump` + `fyrst-cli shopware db import`).
-   `--data mysql_data` / `redis_data` refused.
+   `--data all` is refused (on `sync pull` / `backup create`, `all` includes
+   db). `--data mysql_data` / `redis_data` refused.
 6. `--delete` is opt-in (`rsync --delete`). Default keeps extra local files.
    rsync is `-azH` and **omits `--numeric-ids`** so files are owned by the
    local user, not VPS uid 82.
@@ -394,7 +417,7 @@ Path remap (remote `$REMOTE_DATA_ROOT` → local shopware-cli project tree):
 
 Requires `rsync` and an OpenSSH `ssh` client.
 
-## `shopware sync sync` (implemented)
+## `shopware sync pull` (implemented)
 
 Overlay `do_sync` minus dump wrap. Run on the consumer (staging / playground /
 dev). Typical cron: `--from live --data all`.
@@ -430,7 +453,7 @@ logged.
 ## Exact backup CLI
 
 ```text
-fyrst-cli shopware backup backup [--data LIST] [--dry-run]
+fyrst-cli shopware backup create [--data LIST] [--dry-run]
 ```
 
 Default `--data`: `db,media,files,thumbnail,theme,sitemap`.
@@ -453,7 +476,7 @@ $BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/YYYYMMDDTHHMMSSZ/
   SHA256SUMS                # when sha256sum exists
 ```
 
-## `shopware backup backup` (implemented)
+## `shopware backup create` (implemented)
 
 Off-host backup of runtime artifacts. Sync is **not** a backup. Live
 (`SHOPWARE_DEPLOY_ENV=live`) is allowed and expected (cron on live).
@@ -502,7 +525,7 @@ directories by timestamp name**, not by `--data` subset.
 Stamp-based retention under
 `$BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/`. Not a dump
 command and does not wrap `shopware-cli`. Creating artifacts is
-`shopware backup backup`.
+`shopware backup create`.
 
 Resolves shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`),
 loads `.env` then `.env.prod` then `deploy/sync.env` then `deploy/backup.env`.
@@ -554,7 +577,7 @@ When implemented, remaining verbs should exec (or source-equivalent) the
 overlay script with the parsed argv, rather than re-coding rewrite / rsync in
 Rust. `sync restore` volumes/orchestration already match the overlay in this
 CLI (rsync + compose `web` console rewrite); do not reimplement rewrite in SQL.
-`db import`, `sync-local`, and `sync sync` are in-process (MySQL client; rsync/ssh).
+`db import`, `sync local`, and `sync pull` are in-process (MySQL client; rsync/ssh).
 Recipe and `shopware-cd` product code stay out of this repo. Recipe bash
 wrappers are **not** switched to `fyrst-cli` in this change. Dump remains
 shopware-cli even after wrappers land. Rollback reuses the release

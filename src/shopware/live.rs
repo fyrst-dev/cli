@@ -16,7 +16,7 @@ use std::process::Command;
 pub enum LivePolicy {
     /// Standalone import: refuse live unless `--allow-live` or env `1`.
     DbImport { allow_live_flag: bool },
-    /// `sync restore` / `sync sync`: refuse live unless `SYNC_ALLOW_LIVE_RESTORE=1`.
+    /// `sync restore` / `sync pull`: refuse live unless `SYNC_ALLOW_LIVE_RESTORE=1`.
     SyncRestore,
 }
 

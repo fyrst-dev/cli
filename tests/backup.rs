@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware backup backup`.
+//! Integration tests for `fyrst-cli shopware backup create`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -89,10 +89,10 @@ fn backup(shop: &Path, extra_env: &[(&str, &str)], extra: &[&str]) -> Output {
     for (k, v) in extra_env {
         cmd.env(*k, *v);
     }
-    cmd.args(["shopware", "backup", "backup"]);
+    cmd.args(["shopware", "backup", "create"]);
     cmd.args(extra);
     cmd.output()
-        .unwrap_or_else(|e| panic!("failed to run backup {extra:?}: {e}"))
+        .unwrap_or_else(|e| panic!("failed to run backup create {extra:?}: {e}"))
 }
 
 fn stdout(out: &Output) -> String {
@@ -110,7 +110,7 @@ fn combined(out: &Output) -> String {
 #[test]
 fn backup_help_lists_flags() {
     let out = bin()
-        .args(["shopware", "backup", "backup", "--help"])
+        .args(["shopware", "backup", "create", "--help"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -342,4 +342,35 @@ fn execute_prunes_old_stamps() {
         backups.join("acme").join("live").join(keep_name).exists(),
         "non-stamp name kept"
     );
+}
+
+#[test]
+fn overlay_alias_backup_backup_still_runs() {
+    let shop = TempShop::new("alias");
+    shop.write_shop("live");
+    let data = shop.data_root();
+    let backups = shop.path().join("backups");
+    let mut cmd = bin();
+    cmd.current_dir(shop.path());
+    cmd.env("COMPOSE_DIR", shop.path());
+    for k in LEAK_KEYS {
+        if *k != "COMPOSE_DIR" {
+            cmd.env_remove(k);
+        }
+    }
+    cmd.env("BACKUP_TARGET", backups.to_str().unwrap());
+    cmd.env("SHOPWARE_DATA_ROOT", data.to_str().unwrap());
+    let out = cmd
+        .args([
+            "shopware",
+            "backup",
+            "backup",
+            "--dry-run",
+            "--data",
+            "media",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    assert!(stdout(&out).contains("DRY-RUN"), "{}", stdout(&out));
 }

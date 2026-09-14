@@ -76,7 +76,7 @@ pub fn rewrite_log_line(env: &ShopEnv, compose_dir: &Path, dry_run: bool) -> Str
     )
 }
 
-/// Names used by `shopware sync sync` (same predicates as restore).
+/// Names used by `shopware sync pull` (same predicates as restore).
 pub fn requested(env: &ShopEnv) -> bool {
     rewrite_requested(env)
 }

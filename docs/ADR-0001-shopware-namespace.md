@@ -54,10 +54,14 @@ the MySQL client for import, because no upstream CLI command exists.
    fyrst-cli shopware release
    fyrst-cli shopware rollback
    fyrst-cli shopware db import
-   fyrst-cli shopware sync {snapshot|restore|sync}
-   fyrst-cli shopware sync-local
-   fyrst-cli shopware backup {backup|prune|restore}
+   fyrst-cli shopware sync {snapshot|restore|pull|local}
+   fyrst-cli shopware backup {create|prune|restore}
    ```
+
+   Overlay / script aliases (clap): `sync pull` = `sync sync`;
+   `backup create` = `backup backup`; `sync local` = top-level `sync-local`.
+   Operator-facing names prefer the non-doubled verbs. Overlay script *files*
+   are unchanged (out of scope for this CLI rename).
 
 3. **Dump vs import split:**
    - **Dump = shopware-cli only.** Operators run `shopware-cli project dump`
@@ -72,18 +76,21 @@ the MySQL client for import, because no upstream CLI command exists.
    `docker compose … exec -T mysql`; else `DATABASE_URL` through a one-shot
    mysql/mariadb client image. Support `.sql` and `.sql.gz`. `--dry-run`
    prints the plan. Passwords never appear on stdout/stderr.
-5. **Live guards:** `sync restore` hard-refuses a live consumer unless
-   `SYNC_ALLOW_LIVE_RESTORE=1` (overlay `assert_not_live_restore`). Standalone
-   `db import` uses the same live detection but requires `--allow-live` or
-   `SYNC_ALLOW_LIVE_RESTORE=1` so staging imports stay unscary while live is
-   never a silent default.
+5. **Live guards:** `sync restore` and `sync pull` hard-refuse a live
+   consumer unless `SYNC_ALLOW_LIVE_RESTORE=1` (overlay
+   `assert_not_live_restore`). Standalone `db import` uses the same live
+   detection but requires `--allow-live` or `SYNC_ALLOW_LIVE_RESTORE=1` so
+   staging imports stay unscary while live is never a silent default.
+   `backup restore` uses a confirm flag plus `BACKUP_ALLOW_LIVE_RESTORE=1`
+   on live. The short table lives in `shopware --help` and
+   [command-matrix.md](command-matrix.md).
 6. **Backup restore:** `shopware backup restore` is disaster recovery onto
-   **this host**, not live→staging sync. `--from` and
-   `--i-understand-this-restores-this-host` (or `BACKUP_CONFIRM_RESTORE=1`)
-   are required. `SHOPWARE_DEPLOY_ENV=live` needs `BACKUP_ALLOW_LIVE_RESTORE=1`.
-   Inner apply sets `SYNC_ALLOW_LIVE_RESTORE=1` and reuses the sync restore
-   module (db import + bind-mount apply from artifact layout). fyrst-cli
-   does not dump.
+   **this host**, not live→staging sync. `--artifact` (aliases `--stamp`,
+   `--from`) and `--i-understand-this-restores-this-host` (or
+   `BACKUP_CONFIRM_RESTORE=1`) are required. `SHOPWARE_DEPLOY_ENV=live`
+   needs `BACKUP_ALLOW_LIVE_RESTORE=1`. Inner apply sets
+   `SYNC_ALLOW_LIVE_RESTORE=1` and reuses the sync restore module (db import +
+   bind-mount apply from artifact layout). fyrst-cli does not dump.
 7. **Thin wrappers (future):** remaining verbs may invoke matching recipe
    scripts. **Rollback** is implemented in this CLI (same compose files and
    `vps_rollout` order as `deploy/vps-rollback.sh`; `IMAGE_TAG` only from
@@ -95,8 +102,15 @@ the MySQL client for import, because no upstream CLI command exists.
 - Operators dump with shopware-cli and import with fyrst-cli.
 - Recipe and `shopware-cd` product code stay unchanged. Wrappers, when
   written, are expected to live in this repo and *call* those artifacts.
-- Nested `sync sync` and `backup backup` look odd in help; they match the
-  overlay script subcommands so a later 1:1 wrap stays obvious.
+- Operator verbs avoid doubled names: `sync pull` and `backup create`.
+  Clap aliases keep overlay/script parity (`sync sync`, `backup backup`,
+  top-level `sync-local`).
+- Two `restore` verbs stay: `sync restore` applies a snapshot/workdir onto
+  this (usually lower) host; `backup restore` is off-host DR. Renaming
+  backup to `recover` would add another alias layer without changing the
+  product split already documented in `--help` and the command matrix.
+  `sync snapshot` stays (not `capture`) for the same overlay-parity reason;
+  help/matrix state that snapshot is a sync workdir, not a retained backup.
 - Other fyrst products should add a sibling of `shopware`, not top-level
   Shopware verbs.
 - `.env` is read as `KEY=VALUE` without bash expansion so passwords containing

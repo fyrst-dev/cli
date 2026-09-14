@@ -1,4 +1,4 @@
-//! `fyrst-cli shopware sync sync` — pull orchestration, no dump wrap.
+//! `fyrst-cli shopware sync pull` — pull orchestration, no dump wrap.
 //!
 //! Matches overlay `do_sync` minus `dump_db_remote` / `dump_db_local`. For `--data`
 //! including `db`, import an already-present dump via the existing import module
@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 pub fn dump_operator_instructions(snapshot_dir: &Path) -> String {
     format!(
-        "No db.sql.gz (or db.sql) in {}. fyrst-cli does not dump databases and does not wrap or shell out to shopware-cli (no `docker run … project dump`). On the source, run `shopware-cli project dump` (example: shopware-cli project dump --skip-lock-tables --compression=gzip --output db.sql.gz) and place db.sql.gz in that directory. Then re-run `fyrst-cli shopware sync sync`, or import with: fyrst-cli shopware db import --file <path.sql|.sql.gz> (same module as `sync restore --data db`).",
+        "No db.sql.gz (or db.sql) in {}. fyrst-cli does not dump databases and does not wrap or shell out to shopware-cli (no `docker run … project dump`). On the source, run `shopware-cli project dump` (example: shopware-cli project dump --skip-lock-tables --compression=gzip --output db.sql.gz) and place db.sql.gz in that directory. Then re-run `fyrst-cli shopware sync pull`, or import with: fyrst-cli shopware db import --file <path.sql|.sql.gz> (same module as `sync restore --data db`).",
         snapshot_dir.display()
     )
 }

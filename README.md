@@ -29,15 +29,15 @@ only after success.
 `--snapshot-dir/data/<item>/` (local and remote SSH `--from`). It does **not**
 dump.
 
-**Also implemented:** `fyrst-cli shopware sync-local` — rsync VPS upload
+**Also implemented:** `fyrst-cli shopware sync local` (alias `sync-local`) — rsync VPS upload
 trees into a local `shopware-cli` project-dev checkout (`./public/media/`,
 `./files/`, …). Never the database. Never local `SHOPWARE_DATA_ROOT`.
 
-**Also implemented:** `fyrst-cli shopware sync sync` — cron pull path: rsync
+**Also implemented:** `fyrst-cli shopware sync pull` (alias `sync sync`) — cron pull path: rsync
 remote bind-mounts onto this host and import an already-present dump (it does
 **not** dump).
 
-**Also implemented:** `fyrst-cli shopware backup backup` — copies bind-mount
+**Also implemented:** `fyrst-cli shopware backup create` (alias `backup backup`) — copies bind-mount
 trees (and an operator-provided `db.sql.gz`) into `BACKUP_TARGET`. Live is
 allowed. It does **not** dump.
 
@@ -46,9 +46,9 @@ retention under `BACKUP_TARGET` (`BACKUP_KEEP_DAYS`, default 14, `0` = keep
 forever). Prune does not dump.
 
 **Also implemented:** `fyrst-cli shopware backup restore` — disaster recovery
-onto this host from a backup artifact (`--from`, confirmation required; live
-needs `BACKUP_ALLOW_LIVE_RESTORE=1`). Inner apply reuses sync restore. This
-CLI does not dump.
+onto this host from a backup artifact (`--artifact` / `--stamp`, alias `--from`;
+confirmation required; live needs `BACKUP_ALLOW_LIVE_RESTORE=1`). Inner apply
+reuses sync restore. This CLI does not dump.
 
 **Dump is not in fyrst-cli.** Database dumps are owned completely by
 `shopware-cli project dump`. This CLI does not provide a dump command and
@@ -120,7 +120,7 @@ Requires a Rust toolchain (edition 2021).
 
 Docker is still required at runtime for `shopware db import` (Compose `mysql`
 exec, or a one-shot mysql/mariadb client container) and for `shopware release`
-/ `shopware rollback` (Compose pull + recreate). `shopware sync-local` needs
+/ `shopware rollback` (Compose pull + recreate). `shopware sync local` needs
 `rsync` and an OpenSSH `ssh` client (BatchMode; no password prompts).
 Installing this binary does not replace Docker.
 Dump stays with `shopware-cli project dump`; fyrst-cli does not dump.
@@ -134,9 +134,9 @@ fyrst-cli shopware rollback           # VPS rollback to .previous-tag
 fyrst-cli shopware db import          # SQL import (this is real)
 fyrst-cli shopware sync snapshot       # volumes; dump = shopware-cli
 fyrst-cli shopware sync restore        # DB + volumes + opt-in rewrite
-fyrst-cli shopware sync sync           # pull: rsync + import (not dump)
-fyrst-cli shopware sync-local          # VPS → project-dev rsync (never DB)
-fyrst-cli shopware backup backup
+fyrst-cli shopware sync pull           # rsync + import (not dump); alias: sync sync
+fyrst-cli shopware sync local          # VPS → project-dev rsync (never DB); alias: sync-local
+fyrst-cli shopware backup create       # alias: backup backup
 fyrst-cli shopware backup prune         # stamp-based retention
 fyrst-cli shopware backup restore      # DR onto this host (confirmation)
 ```
@@ -147,9 +147,9 @@ fyrst-cli shopware backup restore      # DR onto this host (confirmation)
 | `deploy/vps-release.sh` | `fyrst-cli shopware release` |
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware rollback` |
 | — | `fyrst-cli shopware db import` |
-| `deploy/sync-runtime.sh` | `fyrst-cli shopware sync {snapshot\|restore\|sync}` |
-| `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync-local` |
-| `deploy/backup-runtime.sh` | `fyrst-cli shopware backup {backup\|prune\|restore}` |
+| `deploy/sync-runtime.sh` | `fyrst-cli shopware sync {snapshot\|restore\|pull}` (`pull` alias: `sync`) |
+| `deploy/sync-runtime-local.sh` | `fyrst-cli shopware sync local` (alias `sync-local`) |
+| `deploy/backup-runtime.sh` | `fyrst-cli shopware backup {create\|prune\|restore}` (`create` alias: `backup`) |
 
 ```text
 fyrst-cli shopware --help
@@ -157,7 +157,7 @@ fyrst-cli shopware init-env --help
 fyrst-cli shopware db import --help
 fyrst-cli shopware release --help
 fyrst-cli shopware rollback --help
-fyrst-cli shopware sync-local --help
+fyrst-cli shopware sync local --help
 fyrst-cli shopware backup prune --help
 ```
 
@@ -213,7 +213,7 @@ fyrst-cli shopware sync restore --data db --snapshot-dir /tmp/sw-snap --dry-run
 fyrst-cli shopware sync restore --data media --snapshot-dir /tmp/sw-snap --dry-run
 
 # Cron pull on staging (volumes from live; DB only if db.sql.gz is already in --snapshot-dir)
-fyrst-cli shopware sync sync --from live --skip-db --data media,files --dry-run
+fyrst-cli shopware sync pull --from live --skip-db --data media,files --dry-run
 ```
 
 Behaviour (aligned with recipes `restore_db_local` / `restore_db_via_url`):
@@ -241,7 +241,7 @@ Required:
 silently trash production.
 
 - **`db import`:** pass `--allow-live` or set `SYNC_ALLOW_LIVE_RESTORE=1`.
-- **`sync restore` / `sync sync`:** same live detection as the overlay; override
+- **`sync restore` / `sync pull`:** same live detection as the overlay; override
   only with `SYNC_ALLOW_LIVE_RESTORE=1` (not `--allow-live`). Staging/playground/dev
   do not need extra flags. Opt-in URL rewrite after restore/sync is **never**
   allowed on live, even with `SYNC_ALLOW_LIVE_RESTORE=1`.
@@ -310,22 +310,23 @@ non-zero. Optional env matches release: `COMPOSE_PROFILES`, `SMOKE_URL`,
 rollout (and smoke, if `SMOKE_URL` is set). Never builds images or compiles
 themes/assets.
 
-## sync-local (VPS → laptop project-dev)
+## sync local (VPS → laptop project-dev)
 
 Run from the shop checkout (directory with `.env` + `public/` or
 `composer.json`), or set `COMPOSE_DIR`. Pulls remote bind-mount trees into
 **project-tree** paths. Does not restore the database. Does not write into
-`SHOPWARE_DATA_ROOT`.
+`SHOPWARE_DATA_ROOT`. Alias: `fyrst-cli shopware sync-local`.
 
 ```bash
 # Print mappings; do not copy
-fyrst-cli shopware sync-local --dry-run
+fyrst-cli shopware sync local --dry-run
 
 # Default --from live; default --data media,files,thumbnail,theme,sitemap
-fyrst-cli shopware sync-local --from live --data all
+# (--data all is refused: on sync pull / backup create, all includes db)
+fyrst-cli shopware sync local --from live
 
-fyrst-cli shopware sync-local --from live --data media,files
-fyrst-cli shopware sync-local --from live --data all --delete
+fyrst-cli shopware sync local --from live --data media,files
+fyrst-cli shopware sync local --from live --delete
 ```
 
 `--data db` is refused. After a successful pull:
@@ -359,21 +360,21 @@ targets only. SSH targets use `ssh -o BatchMode=yes`.
 
 ## Backup restore
 
-Disaster recovery onto **this host** (not live→staging sync). `--from` is a
+Disaster recovery onto **this host** (not live→staging sync). `--artifact` is a
 stamp under `$BACKUP_TARGET/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/` or a
-directory path.
+directory path. `--stamp` and `--from` are aliases.
 
 ```bash
 # Staging drill (print fetch + import/volume plan)
-fyrst-cli shopware backup restore --from 20260912T020000Z \
+fyrst-cli shopware backup restore --artifact 20260912T020000Z \
   --i-understand-this-restores-this-host --dry-run
 
 # Apply (overwrites DB and bind mounts on this host)
-fyrst-cli shopware backup restore --from 20260912T020000Z \
+fyrst-cli shopware backup restore --artifact 20260912T020000Z \
   --i-understand-this-restores-this-host
 
 # Live DR only
-BACKUP_ALLOW_LIVE_RESTORE=1 fyrst-cli shopware backup restore --from 20260912T020000Z \
+BACKUP_ALLOW_LIVE_RESTORE=1 fyrst-cli shopware backup restore --artifact 20260912T020000Z \
   --i-understand-this-restores-this-host
 ```
 
@@ -392,7 +393,7 @@ cargo run -- shopware init-env --help
 cargo run -- shopware db import --help
 cargo run -- shopware release --help
 cargo run -- shopware rollback --help
-cargo run -- shopware sync-local --help
+cargo run -- shopware sync local --help
 cargo run -- shopware backup prune --help
 cargo run -- shopware backup restore --help
 cargo test

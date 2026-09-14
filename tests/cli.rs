@@ -33,12 +33,18 @@ fn shopware_help_prints_command_tree() {
         "backup",
         "fyrst-cli shopware db import",
         "fyrst-cli shopware sync snapshot",
+        "fyrst-cli shopware sync pull",
+        "fyrst-cli shopware sync local",
+        "fyrst-cli shopware backup create",
         "fyrst-cli shopware backup restore",
         "not implemented",
         "shopware-cli",
         "Dump = shopware-cli",
         "Import = fyrst-cli",
-        "Backup = fyrst-cli shopware backup backup",
+        "Backup = fyrst-cli shopware backup create",
+        "Live policy",
+        "SYNC_ALLOW_LIVE_RESTORE",
+        "BACKUP_ALLOW_LIVE_RESTORE",
     ] {
         assert!(
             help.contains(needle),
@@ -105,9 +111,9 @@ fn dump_is_absent_from_cli_surface() {
 }
 
 #[test]
-fn sync_help_lists_snapshot_restore_sync() {
+fn sync_help_lists_snapshot_restore_pull_local() {
     let help = stdout(&["shopware", "sync", "--help"]);
-    for needle in ["snapshot", "restore"] {
+    for needle in ["snapshot", "restore", "pull", "local"] {
         assert!(
             help.contains(needle),
             "shopware sync --help missing `{needle}`:\n{help}",
@@ -115,8 +121,12 @@ fn sync_help_lists_snapshot_restore_sync() {
     }
     assert!(
         help.lines()
-            .any(|l| l.split_whitespace().next() == Some("sync")),
-        "shopware sync --help missing nested `sync` verb:\n{help}",
+            .any(|l| l.split_whitespace().next() == Some("pull")),
+        "shopware sync --help missing nested `pull` verb:\n{help}",
+    );
+    assert!(
+        help.contains("sync"),
+        "shopware sync --help should mention overlay alias `sync`:\n{help}",
     );
 }
 
@@ -124,6 +134,8 @@ fn sync_help_lists_snapshot_restore_sync() {
 fn backup_restore_help_lists_flags_and_does_not_wrap_dump() {
     let help = stdout(&["shopware", "backup", "restore", "--help"]);
     for needle in [
+        "--artifact",
+        "--stamp",
         "--from",
         "--data",
         "--dry-run",
@@ -142,14 +154,18 @@ fn backup_restore_help_lists_flags_and_does_not_wrap_dump() {
 }
 
 #[test]
-fn backup_help_lists_backup_prune_restore() {
+fn backup_help_lists_create_prune_restore() {
     let help = stdout(&["shopware", "backup", "--help"]);
-    for needle in ["backup", "prune", "restore"] {
+    for needle in ["create", "prune", "restore"] {
         assert!(
             help.contains(needle),
             "shopware backup --help missing `{needle}`:\n{help}",
         );
     }
+    assert!(
+        help.contains("backup"),
+        "shopware backup --help should mention overlay alias `backup`:\n{help}",
+    );
 }
 
 #[test]
