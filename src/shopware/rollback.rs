@@ -1,4 +1,4 @@
-//! `fyrst-cli shopware rollback` — recipes `deploy/vps-rollback.sh`.
+//! `fyrst-cli shopware deploy rollback` — recipes `deploy/vps-rollback.sh`.
 //!
 //! `IMAGE` stays from env / `.env`. `IMAGE_TAG` is **only** `.previous-tag`
 //! (process-env `IMAGE_TAG` is ignored). Reuses the release compose/rollout

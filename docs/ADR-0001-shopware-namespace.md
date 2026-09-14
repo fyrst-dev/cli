@@ -1,6 +1,7 @@
 # ADR 0001: Shopware CD lives under `fyrst-cli shopware`
 
-- Status: Accepted
+- Status: Accepted (namespace, dump/import split, live guards).
+  Command **names** superseded by [ADR-0002](ADR-0002-shopware-lifecycle-regroup.md).
 - Date: 2026-09-13
 
 ## Context
@@ -45,30 +46,28 @@ the MySQL client for import, because no upstream CLI command exists.
 1. **Namespace:** all Shopware CD operations hang off
    `fyrst-cli shopware <subcommand>` so the binary can later host other fyrst
    namespaces without colliding with Shopware verbs.
-2. **Command map:** overlay script names become CLI verbs (see
-   [command-matrix.md](command-matrix.md)), plus a first-class import verb
+2. **Command map:** overlay *scripts* stay the product source; operator verbs
+   are grouped by lifecycle (see [ADR-0002](ADR-0002-shopware-lifecycle-regroup.md)
+   and [command-matrix.md](command-matrix.md)), plus a first-class import verb
    that the overlay only has as `restore_db_*` internals:
 
    ```
-   fyrst-cli shopware init-env
-   fyrst-cli shopware release
-   fyrst-cli shopware rollback
+   fyrst-cli shopware env init
+   fyrst-cli shopware deploy {release|rollback}
    fyrst-cli shopware db import
-   fyrst-cli shopware sync {snapshot|restore|pull|local}
-   fyrst-cli shopware backup {create|prune|restore}
+   fyrst-cli shopware sync {capture|apply|pull|local}
+   fyrst-cli shopware backup {create|prune|recover}
    ```
 
-   Overlay / script aliases (clap): `sync pull` = `sync sync`;
-   `backup create` = `backup backup`; `sync local` = top-level `sync-local`.
-   Operator-facing names prefer the non-doubled verbs. Overlay script *files*
-   are unchanged (out of scope for this CLI rename).
+   Overlay script *files* are unchanged (out of scope for the CLI regroup).
+   Old clap paths are a hard cut (no aliases).
 
 3. **Dump vs import split:**
    - **Dump = shopware-cli only.** Operators run `shopware-cli project dump`
-     (or the Flex overlay). fyrst-cli `sync snapshot` does not dump, does not
+     (or the Flex overlay). fyrst-cli `sync capture` does not dump, does not
      shell out to shopware-cli, and tells the operator to use shopware-cli.
    - **Import = fyrst-cli.** `fyrst-cli shopware db import --file
-     <path.sql|.sql.gz>` is the implemented path. `shopware sync restore`
+     <path.sql|.sql.gz>` is the implemented path. `shopware sync apply`
      with `--data db` calls the same import module (`db.sql.gz` / `db.sql`
      under `--snapshot-dir`).
 4. **Import mechanics** (recipes `restore_db_local` / `restore_db_via_url`):
@@ -76,20 +75,20 @@ the MySQL client for import, because no upstream CLI command exists.
    `docker compose … exec -T mysql`; else `DATABASE_URL` through a one-shot
    mysql/mariadb client image. Support `.sql` and `.sql.gz`. `--dry-run`
    prints the plan. Passwords never appear on stdout/stderr.
-5. **Live guards:** `sync restore` and `sync pull` hard-refuse a live
+5. **Live guards:** `sync apply` and `sync pull` hard-refuse a live
    consumer unless `SYNC_ALLOW_LIVE_RESTORE=1` (overlay
    `assert_not_live_restore`). Standalone `db import` uses the same live
    detection but requires `--allow-live` or `SYNC_ALLOW_LIVE_RESTORE=1` so
    staging imports stay unscary while live is never a silent default.
-   `backup restore` uses a confirm flag plus `BACKUP_ALLOW_LIVE_RESTORE=1`
+   `backup recover` uses a confirm flag plus `BACKUP_ALLOW_LIVE_RESTORE=1`
    on live. The short table lives in `shopware --help` and
    [command-matrix.md](command-matrix.md).
-6. **Backup restore:** `shopware backup restore` is disaster recovery onto
+6. **Backup recover:** `shopware backup recover` is disaster recovery onto
    **this host**, not live→staging sync. `--artifact` (aliases `--stamp`,
    `--from`) and `--i-understand-this-restores-this-host` (or
    `BACKUP_CONFIRM_RESTORE=1`) are required. `SHOPWARE_DEPLOY_ENV=live`
    needs `BACKUP_ALLOW_LIVE_RESTORE=1`. Inner apply sets
-   `SYNC_ALLOW_LIVE_RESTORE=1` and reuses the sync restore module (db import +
+   `SYNC_ALLOW_LIVE_RESTORE=1` and reuses the sync apply module (db import +
    bind-mount apply from artifact layout). fyrst-cli does not dump.
 7. **Thin wrappers (future):** remaining verbs may invoke matching recipe
    scripts. **Rollback** is implemented in this CLI (same compose files and
@@ -102,15 +101,11 @@ the MySQL client for import, because no upstream CLI command exists.
 - Operators dump with shopware-cli and import with fyrst-cli.
 - Recipe and `shopware-cd` product code stay unchanged. Wrappers, when
   written, are expected to live in this repo and *call* those artifacts.
-- Operator verbs avoid doubled names: `sync pull` and `backup create`.
-  Clap aliases keep overlay/script parity (`sync sync`, `backup backup`,
-  top-level `sync-local`).
-- Two `restore` verbs stay: `sync restore` applies a snapshot/workdir onto
-  this (usually lower) host; `backup restore` is off-host DR. Renaming
-  backup to `recover` would add another alias layer without changing the
-  product split already documented in `--help` and the command matrix.
-  `sync snapshot` stays (not `capture`) for the same overlay-parity reason;
-  help/matrix state that snapshot is a sync workdir, not a retained backup.
+- Operator verbs are lifecycle groups (`env`, `deploy`, `db`, `sync`,
+  `backup`). Naming of those verbs is in
+  [ADR-0002](ADR-0002-shopware-lifecycle-regroup.md): `sync apply` vs
+  `backup recover` is the product split (workdir vs off-host DR); clap
+  aliases for old overlay-shaped paths are not kept.
 - Other fyrst products should add a sibling of `shopware`, not top-level
   Shopware verbs.
 - `.env` is read as `KEY=VALUE` without bash expansion so passwords containing

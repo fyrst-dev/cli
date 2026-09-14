@@ -1,6 +1,6 @@
 //! MySQL/MariaDB connection helpers and Compose `mysql` bring-up.
 //!
-//! Used by `shopware db import` (and `sync restore` for the DB). Passwords
+//! Used by `shopware db import` (and `sync apply` for the DB). Passwords
 //! must never appear in log lines.
 
 use super::env::ShopEnv;

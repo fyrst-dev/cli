@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware backup restore`.
+//! Integration tests for `fyrst-cli shopware backup recover`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -107,10 +107,10 @@ fn backup_restore(shop: &Path, extra: &[&str], extra_env: &[(&str, &str)]) -> Ou
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
-    cmd.args(["shopware", "backup", "restore"]);
+    cmd.args(["shopware", "backup", "recover"]);
     cmd.args(extra);
     cmd.output()
-        .unwrap_or_else(|e| panic!("failed to run backup restore {extra:?}: {e}"))
+        .unwrap_or_else(|e| panic!("failed to run backup recover {extra:?}: {e}"))
 }
 
 fn stdout(out: &Output) -> String {

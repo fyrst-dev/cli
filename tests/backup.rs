@@ -343,34 +343,3 @@ fn execute_prunes_old_stamps() {
         "non-stamp name kept"
     );
 }
-
-#[test]
-fn overlay_alias_backup_backup_still_runs() {
-    let shop = TempShop::new("alias");
-    shop.write_shop("live");
-    let data = shop.data_root();
-    let backups = shop.path().join("backups");
-    let mut cmd = bin();
-    cmd.current_dir(shop.path());
-    cmd.env("COMPOSE_DIR", shop.path());
-    for k in LEAK_KEYS {
-        if *k != "COMPOSE_DIR" {
-            cmd.env_remove(k);
-        }
-    }
-    cmd.env("BACKUP_TARGET", backups.to_str().unwrap());
-    cmd.env("SHOPWARE_DATA_ROOT", data.to_str().unwrap());
-    let out = cmd
-        .args([
-            "shopware",
-            "backup",
-            "backup",
-            "--dry-run",
-            "--data",
-            "media",
-        ])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
-    assert!(stdout(&out).contains("DRY-RUN"), "{}", stdout(&out));
-}

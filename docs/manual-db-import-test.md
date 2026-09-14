@@ -45,12 +45,12 @@ password from `DATABASE_URL`.
 fyrst-cli shopware db import --file /tmp/db.sql.gz
 ```
 
-Same file via sync restore:
+Same file via sync apply:
 
 ```bash
 mkdir -p /tmp/sw-snap
 cp /tmp/db.sql.gz /tmp/sw-snap/db.sql.gz
-fyrst-cli shopware sync restore --data db --snapshot-dir /tmp/sw-snap --dry-run
+fyrst-cli shopware sync apply --data db --snapshot-dir /tmp/sw-snap --dry-run
 ```
 
 ## Live refuse
@@ -64,7 +64,7 @@ fyrst-cli shopware db import --file /tmp/db.sql.gz --dry-run
 fyrst-cli shopware db import --file /tmp/db.sql.gz --dry-run --allow-live
 # expect WARNING and a DRY-RUN plan
 
-fyrst-cli shopware sync restore --data db --dry-run
+fyrst-cli shopware sync apply --data db --dry-run
 # expect exit 1 unless SYNC_ALLOW_LIVE_RESTORE=1
 ```
 
@@ -72,9 +72,9 @@ fyrst-cli shopware sync restore --data db --dry-run
 
 ```bash
 fyrst-cli shopware --help
-fyrst-cli shopware sync snapshot --help
-fyrst-cli shopware sync snapshot --data db --dry-run
+fyrst-cli shopware sync capture --help
+fyrst-cli shopware sync capture --data db --dry-run
 ```
 
-`--help` must not present snapshot as a dump implementation. `--data db`
+`--help` must not present capture as a dump implementation. `--data db`
 must exit 2 and mention `shopware-cli project dump` (no `docker run … project dump`).

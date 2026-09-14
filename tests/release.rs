@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware release`.
+//! Integration tests for `fyrst-cli shopware deploy release`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -100,7 +100,7 @@ fn release(shop: &Path, extra: &[&str], extra_env: &[(&str, &str)]) -> Output {
     for (k, v) in extra_env {
         cmd.env(*k, v);
     }
-    cmd.args(["shopware", "release"]);
+    cmd.args(["shopware", "deploy", "release"]);
     cmd.args(extra);
     cmd.output()
         .unwrap_or_else(|e| panic!("failed to run release {extra:?}: {e}"))
@@ -121,7 +121,7 @@ fn combined(out: &Output) -> String {
 #[test]
 fn release_help_documents_flags() {
     let out = bin()
-        .args(["shopware", "release", "--help"])
+        .args(["shopware", "deploy", "release", "--help"])
         .output()
         .unwrap();
     assert!(out.status.success());

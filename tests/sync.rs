@@ -512,33 +512,3 @@ fn all_without_dump_still_prints_volume_plan() {
     assert!(log.contains("DRY-RUN rsync -az --delete"), "{log}");
     assert_no_dump_wrap(&combined(&out));
 }
-
-#[test]
-fn overlay_alias_sync_sync_still_runs() {
-    let shop = TempShop::new("alias");
-    shop.write_staging();
-    let mut cmd = bin();
-    cmd.current_dir(shop.path());
-    cmd.env("COMPOSE_DIR", shop.path());
-    for k in LEAK_KEYS {
-        if *k != "COMPOSE_DIR" {
-            cmd.env_remove(k);
-        }
-    }
-    let out = cmd
-        .args([
-            "shopware",
-            "sync",
-            "sync",
-            "--dry-run",
-            "--from",
-            "live",
-            "--skip-db",
-            "--data",
-            "media",
-        ])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
-    assert!(stdout(&out).contains("DRY-RUN"), "{}", stdout(&out));
-}

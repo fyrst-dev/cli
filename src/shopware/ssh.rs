@@ -1,6 +1,6 @@
 //! SSH source resolution for remote `--from` (recipes `deploy/lib/sync-ssh.sh`).
 //!
-//! Used by `shopware sync snapshot` to rsync bind-mount trees. Never used to
+//! Used by `shopware sync capture` to rsync bind-mount trees. Never used to
 //! run `shopware-cli project dump` on the remote.
 
 use super::env::{derived_data_root, require_cmd, source_env_for_remote, ShopEnv};
