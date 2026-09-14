@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware sync-local` (never DB).
+//! Integration tests for `fyrst-cli shopware sync local` (never DB).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,10 +99,10 @@ fn sync_local(shop: &Path, extra: &[&str]) -> Output {
             cmd.env_remove(k);
         }
     }
-    cmd.args(["shopware", "sync-local"]);
+    cmd.args(["shopware", "sync", "local"]);
     cmd.args(extra);
     cmd.output()
-        .unwrap_or_else(|e| panic!("failed to run sync-local {extra:?}: {e}"))
+        .unwrap_or_else(|e| panic!("failed to run sync local {extra:?}: {e}"))
 }
 
 fn stdout(out: &Output) -> String {
@@ -116,7 +116,7 @@ fn stderr(out: &Output) -> String {
 #[test]
 fn help_lists_flags() {
     let out = bin()
-        .args(["shopware", "sync-local", "--help"])
+        .args(["shopware", "sync", "local", "--help"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -133,7 +133,7 @@ fn help_lists_flags() {
     }
     assert!(
         !help.to_ascii_lowercase().contains("dump db via"),
-        "sync-local --help must not wrap dump:\n{help}"
+        "sync local --help must not wrap dump:\n{help}"
     );
 }
 
@@ -264,4 +264,40 @@ fn live_checkout_warns_on_stderr() {
     assert!(stderr(&out).contains("WARNING:"), "{}", stderr(&out));
     assert!(stderr(&out).contains("named 'live'"), "{}", stderr(&out));
     assert!(stdout(&out).contains(" → ./files/"), "{}", stdout(&out));
+}
+
+#[test]
+fn data_all_is_refused() {
+    let shop = TempShop::new("all");
+    shop.write_min_shop();
+    let out = sync_local(shop.path(), &["--dry-run", "--data", "all"]);
+    assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("Refusing --data all"), "{err}");
+    assert!(err.contains("includes db"), "{err}");
+    assert!(!stdout(&out).contains("DRY-RUN rsync"), "{}", stdout(&out));
+}
+
+#[test]
+fn top_level_sync_local_alias_still_runs() {
+    let shop = TempShop::new("alias");
+    shop.write_min_shop();
+    let mut cmd = bin();
+    cmd.current_dir(shop.path());
+    cmd.env("COMPOSE_DIR", shop.path());
+    for k in LEAK_KEYS {
+        if *k != "COMPOSE_DIR" {
+            cmd.env_remove(k);
+        }
+    }
+    let out = cmd
+        .args(["shopware", "sync-local", "--dry-run", "--data", "media"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    assert!(
+        stdout(&out).contains(" → ./public/media/"),
+        "{}",
+        stdout(&out)
+    );
 }

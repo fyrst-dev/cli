@@ -126,7 +126,7 @@ fn combined(out: &Output) -> String {
 }
 
 #[test]
-fn missing_from_exits_1() {
+fn missing_artifact_exits_1() {
     let shop = TempShop::new("nofrom");
     shop.write_shop("staging");
     let out = backup_restore(
@@ -135,6 +135,7 @@ fn missing_from_exits_1() {
         &[],
     );
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
+    assert!(stderr(&out).contains("--artifact"), "{}", stderr(&out));
     assert!(stderr(&out).contains("--from"), "{}", stderr(&out));
 }
 
@@ -415,4 +416,35 @@ fn missing_backup_target_for_stamp() {
     );
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
     assert!(stderr(&out).contains("BACKUP_TARGET"), "{}", stderr(&out));
+}
+
+#[test]
+fn artifact_and_stamp_flags_work() {
+    let shop = TempShop::new("artifact");
+    shop.write_shop("staging");
+    let stamp = "20260912T020000Z";
+    shop.write_stamp_artifact(stamp);
+    let backups = shop.path().join("backups");
+    for flag in ["--artifact", "--stamp"] {
+        let out = backup_restore(
+            shop.path(),
+            &[
+                "--dry-run",
+                "--data",
+                "db",
+                flag,
+                stamp,
+                "--i-understand-this-restores-this-host",
+            ],
+            &[("BACKUP_TARGET", backups.to_str().unwrap())],
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "flag={flag} stderr={} stdout={}",
+            stderr(&out),
+            stdout(&out)
+        );
+        assert!(stdout(&out).contains("DRY-RUN"), "{}", stdout(&out));
+    }
 }

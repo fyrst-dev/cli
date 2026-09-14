@@ -7,9 +7,10 @@
 //! Rollback is `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`).
 //! `shopware sync snapshot` copies bind-mount trees (not a dump).
 //! `sync restore` restores DB, volumes, and opt-in rewrite.
-//! `shopware sync sync` pulls bind-mounts over SSH and imports an existing dump
-//! (does not dump). `shopware sync-local` rsyncs VPS upload trees into a local
-//! project-dev checkout (never DB). `shopware backup backup` copies bind-mount
+//! `shopware sync pull` (alias `sync sync`) pulls bind-mounts over SSH and
+//! imports an existing dump (does not dump). `shopware sync local` (alias
+//! `sync-local`) rsyncs VPS upload trees into a local project-dev checkout
+//! (never DB). `shopware backup create` (alias `backup backup`) copies bind-mount
 //! trees (live allowed) and an operator-provided dump file.
 //! `shopware backup prune` is stamp-based retention under BACKUP_TARGET.
 //! `shopware backup restore` is disaster recovery onto this host.

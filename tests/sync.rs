@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware sync sync` (pull, no dump wrap).
+//! Integration tests for `fyrst-cli shopware sync pull` (pull, no dump wrap).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -138,10 +138,10 @@ fn sync_cmd(shop: &Path, extra: &[&str]) -> Output {
             cmd.env_remove(k);
         }
     }
-    cmd.args(["shopware", "sync", "sync"]);
+    cmd.args(["shopware", "sync", "pull"]);
     cmd.args(extra);
     cmd.output()
-        .unwrap_or_else(|e| panic!("failed to run sync sync {extra:?}: {e}"))
+        .unwrap_or_else(|e| panic!("failed to run sync pull {extra:?}: {e}"))
 }
 
 fn stdout(out: &Output) -> String {
@@ -178,7 +178,7 @@ fn assert_no_dump_wrap(text: &str) {
 #[test]
 fn sync_help_lists_flags() {
     let out = bin()
-        .args(["shopware", "sync", "sync", "--help"])
+        .args(["shopware", "sync", "pull", "--help"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -511,4 +511,34 @@ fn all_without_dump_still_prints_volume_plan() {
     let log = stdout(&out);
     assert!(log.contains("DRY-RUN rsync -az --delete"), "{log}");
     assert_no_dump_wrap(&combined(&out));
+}
+
+#[test]
+fn overlay_alias_sync_sync_still_runs() {
+    let shop = TempShop::new("alias");
+    shop.write_staging();
+    let mut cmd = bin();
+    cmd.current_dir(shop.path());
+    cmd.env("COMPOSE_DIR", shop.path());
+    for k in LEAK_KEYS {
+        if *k != "COMPOSE_DIR" {
+            cmd.env_remove(k);
+        }
+    }
+    let out = cmd
+        .args([
+            "shopware",
+            "sync",
+            "sync",
+            "--dry-run",
+            "--from",
+            "live",
+            "--skip-db",
+            "--data",
+            "media",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    assert!(stdout(&out).contains("DRY-RUN"), "{}", stdout(&out));
 }

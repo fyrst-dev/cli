@@ -1,13 +1,15 @@
 //! `fyrst-cli shopware backup restore` — disaster recovery onto this host.
 //!
-//! Not `sync restore` (live→staging clone). `--from` and confirmation are
-//! required. Live needs `BACKUP_ALLOW_LIVE_RESTORE=1`; inner apply then sets
+//! Not `sync restore` (live→staging clone). `--artifact` (aliases `--stamp`,
+//! `--from`) and confirmation are required. Live needs
+//! `BACKUP_ALLOW_LIVE_RESTORE=1`; inner apply then sets
 //! `SYNC_ALLOW_LIVE_RESTORE=1`. DB import and bind-mount apply reuse the sync
 //! restore module. fyrst-cli does not dump.
 
 use super::data::normalize_data;
 use super::env::{
-    env_truthy, require_deploy_env, require_shop_id, resolve_compose_dir, resolve_data_root, ShopEnv,
+    env_truthy, require_deploy_env, require_shop_id, resolve_compose_dir, resolve_data_root,
+    ShopEnv,
 };
 use super::error::Error;
 use super::restore;
@@ -48,12 +50,9 @@ pub(crate) fn restore_from_args(
     cwd: &Path,
 ) -> Result<(), Error> {
     let shop_id = require_shop_id(env)?;
-    let from = args
-        .from
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| Error::fail("restore requires --from <timestamp|directory>"))?;
+    let from = args.artifact_spec().ok_or_else(|| {
+        Error::fail("restore requires --artifact <timestamp|directory> (aliases: --stamp, --from)")
+    })?;
 
     if !args.confirm_restore && !env_truthy(env.get("BACKUP_CONFIRM_RESTORE")) {
         return Err(Error::fail(
@@ -179,9 +178,9 @@ fn fetch_artifact(
         .join("var/backup-work")
         .join(format!("restore-{spec}"));
     let src = target.artifact_dir(&rel);
-    let ssh_target = target.ssh_destination().ok_or_else(|| {
-        Error::fail("internal error: ssh_destination on a local BACKUP_TARGET")
-    })?;
+    let ssh_target = target
+        .ssh_destination()
+        .ok_or_else(|| Error::fail("internal error: ssh_destination on a local BACKUP_TARGET"))?;
     if dry_run {
         notes.push(format!(
             "DRY-RUN rsync {ssh_target}:{}/ → {}/",
@@ -196,9 +195,9 @@ fn fetch_artifact(
 }
 
 fn ssh_e(target: &BackupTarget, identity: Option<&str>) -> Result<String, Error> {
-    let port = target.ssh_port().ok_or_else(|| {
-        Error::fail("internal error: ssh_e on a local BACKUP_TARGET")
-    })?;
+    let port = target
+        .ssh_port()
+        .ok_or_else(|| Error::fail("internal error: ssh_e on a local BACKUP_TARGET"))?;
     let mut s = format!("ssh -o BatchMode=yes -o ConnectTimeout=15 -p {port}");
     if let Some(key) = identity.map(str::trim).filter(|s| !s.is_empty()) {
         s.push_str(" -o IdentitiesOnly=yes -i ");
@@ -226,9 +225,9 @@ fn rsync_from_ssh(
     fs::create_dir_all(dest)
         .map_err(|e| Error::fail(format!("cannot create {}: {e}", dest.display())))?;
     let ssh_e_opt = ssh_e(target, env.get("BACKUP_SSH_KEY"))?;
-    let ssh_target = target.ssh_destination().ok_or_else(|| {
-        Error::fail("internal error: ssh_target on a local BACKUP_TARGET")
-    })?;
+    let ssh_target = target
+        .ssh_destination()
+        .ok_or_else(|| Error::fail("internal error: ssh_target on a local BACKUP_TARGET"))?;
     let src = format!("{ssh_target}:{}/", remote_path.trim_end_matches('/'));
     let dest_a = format!("{}/", dest.display());
     println!("==> rsync {src} → {dest_a}");
@@ -302,7 +301,7 @@ mod tests {
                 data: data.map(str::to_string),
                 dry_run,
             },
-            from: from.map(str::to_string),
+            artifact: from.map(str::to_string),
             confirm_restore: confirm,
         }
     }
@@ -323,6 +322,7 @@ mod tests {
         let mut env = env_for(&shop);
         let err = restore_from_args(&args(None, true, true, Some("db")), &mut env, shop.path())
             .unwrap_err();
+        assert!(err.to_string().contains("--artifact"), "{err}");
         assert!(err.to_string().contains("--from"), "{err}");
     }
 

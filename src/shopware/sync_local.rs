@@ -1,4 +1,4 @@
-//! `fyrst-cli shopware sync-local` — VPS → local shopware-cli project-dev rsync.
+//! `fyrst-cli shopware sync local` — VPS → local shopware-cli project-dev rsync.
 //!
 //! Matches recipes `deploy/sync-runtime-local.sh` (read-only). Never copies
 //! the database. Local destinations are project-tree paths (`./public/media/`,
@@ -128,14 +128,17 @@ pub fn alias_key(from: &str) -> String {
 }
 
 pub fn normalize_sync_local_data(spec: Option<&str>) -> Result<Vec<String>, Error> {
-    let spec = spec
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("all");
-    let spec = if spec.eq_ignore_ascii_case("all") {
-        DEFAULT_SYNC_LOCAL_DATA
-    } else {
-        spec
+    let spec = spec.map(str::trim).filter(|s| !s.is_empty());
+    let spec = match spec {
+        None => DEFAULT_SYNC_LOCAL_DATA,
+        Some(s) if s.eq_ignore_ascii_case("all") => {
+            return Err(Error::fail(
+                "Refusing --data all. On sync pull and backup create, all includes db. \
+This command never copies the database. Omit --data (default: media,files,thumbnail,theme,sitemap) \
+or list those items explicitly.",
+            ));
+        }
+        Some(s) => s,
     };
 
     let mut items = Vec::new();
@@ -153,9 +156,16 @@ pub fn normalize_sync_local_data(spec: Option<&str>) -> Result<Vec<String>, Erro
                     items.push(lower);
                 }
             }
+            "all" => {
+                return Err(Error::fail(
+                    "Refusing --data all. On sync pull and backup create, all includes db. \
+This command never copies the database. Omit --data (default: media,files,thumbnail,theme,sitemap) \
+or list those items explicitly.",
+                ));
+            }
             "db" | "database" | "mysql" => {
                 return Err(Error::fail(format!(
-                    "This command does not restore the database (refusing --data '{item}'). Dump/import SQL separately (`shopware-cli project dump` + `fyrst-cli shopware db import`). VPS DB pull is `fyrst-cli shopware sync sync`. Local dest is the project dev tree, not SHOPWARE_DATA_ROOT."
+                    "This command does not restore the database (refusing --data '{item}'). Dump/import SQL separately (`shopware-cli project dump` + `fyrst-cli shopware db import`). VPS DB pull is `fyrst-cli shopware sync pull`. Local dest is the project dev tree, not SHOPWARE_DATA_ROOT."
                 )));
             }
             "mysql_data" | "redis_data" => {
@@ -165,7 +175,7 @@ pub fn normalize_sync_local_data(spec: Option<&str>) -> Result<Vec<String>, Erro
             }
             _ => {
                 return Err(Error::fail(format!(
-                    "Unknown --data item '{item}'. Use media, files, thumbnail, theme, sitemap, or all."
+                    "Unknown --data item '{item}'. Use media, files, thumbnail, theme, sitemap (not all; all includes db on sync pull / backup create)."
                 )));
             }
         }
@@ -311,7 +321,7 @@ fn live_checkout_warning(shop_root: &Path) -> Option<String> {
     let base = shop_basename(shop_root);
     if base.eq_ignore_ascii_case("live") {
         Some(
-            "checkout directory is named 'live'. This command writes into local shopware-cli project dev paths (./public/media, ./files, …), not VPS SHOPWARE_DATA_ROOT. For VPS staging pull use fyrst-cli shopware sync sync — not this command.".into(),
+            "checkout directory is named 'live'. This command writes into local shopware-cli project dev paths (./public/media, ./files, …), not VPS SHOPWARE_DATA_ROOT. For VPS staging pull use fyrst-cli shopware sync pull — not this command.".into(),
         )
     } else {
         None
@@ -591,10 +601,22 @@ mod tests {
     }
 
     #[test]
-    fn default_all_is_not_db() {
+    fn default_omitted_data_is_not_db() {
         let d = normalize_sync_local_data(None).unwrap();
         assert_eq!(d, vec!["media", "files", "thumbnail", "theme", "sitemap"]);
         assert!(!d.iter().any(|i| i == "db"));
+    }
+
+    #[test]
+    fn refuse_data_all() {
+        for spec in ["all", "ALL", "All"] {
+            let err = normalize_sync_local_data(Some(spec)).unwrap_err();
+            let m = err.to_string();
+            assert!(m.contains("Refusing --data all"), "{m}");
+            assert!(m.contains("includes db"), "{m}");
+        }
+        let err = normalize_sync_local_data(Some("media,all")).unwrap_err();
+        assert!(err.to_string().contains("Refusing --data all"), "{err}");
     }
 
     #[test]

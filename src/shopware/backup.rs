@@ -1,4 +1,4 @@
-//! `fyrst-cli shopware backup backup` — timestamped off-host backup.
+//! `fyrst-cli shopware backup create` — timestamped off-host backup.
 //!
 //! Allowed (and expected) on `SHOPWARE_DEPLOY_ENV=live`. Sync is not a backup.
 //!
@@ -142,7 +142,7 @@ fn execute(ctx: &BackupCtx) -> Result<(), Error> {
     let _lock = lock::acquire(&ctx.compose_dir)?;
 
     log(&format!(
-        "Runtime backup backup shop={} deploy_env={} target={} keep_days={} dry-run={}",
+        "Runtime backup create shop={} deploy_env={} target={} keep_days={} dry-run={}",
         ctx.shop_id,
         ctx.deploy_env,
         ctx.backup_target_raw,

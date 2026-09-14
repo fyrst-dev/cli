@@ -2,16 +2,17 @@
 //!
 //! Database **dump** is owned by `shopware-cli project dump` — this CLI never
 //! wraps it. Database **import** is `fyrst-cli shopware db import` (also used
-//! by `shopware sync restore --data db`, `shopware sync sync` when a dump is
+//! by `shopware sync restore --data db`, `shopware sync pull` when a dump is
 //! already present, and `shopware backup restore`). `init-env` finishes
 //! shop-root `.env` (recipes `deploy/init-env.sh`). VPS **release** is
 //! `fyrst-cli shopware release`. **Rollback** is
 //! `fyrst-cli shopware rollback` (IMAGE_TAG from `.previous-tag`). `sync snapshot`
 //! copies bind-mount trees (not a dump). `sync restore` also restores
-//! bind-mount volumes and opt-in rewrite via compose `web`. `shopware sync sync`
-//! pulls bind-mounts over SSH and imports an existing dump (does not dump).
-//! `shopware sync-local` rsyncs VPS upload trees into a local project-dev
-//! checkout (never DB). `shopware backup backup` copies bind-mount trees and
+//! bind-mount volumes and opt-in rewrite via compose `web`. `shopware sync pull`
+//! (alias `sync sync`) pulls bind-mounts over SSH and imports an existing dump
+//! (does not dump). `shopware sync local` (alias `sync-local`) rsyncs VPS
+//! upload trees into a local project-dev checkout (never DB).
+//! `shopware backup create` (alias `backup backup`) copies bind-mount trees and
 //! an operator-provided dump file (live allowed). `shopware backup prune`
 //! deletes stamp-named artifacts under BACKUP_TARGET. `shopware backup restore`
 //! is disaster recovery onto this host. See docs/ADR-0001-shopware-namespace.md.
@@ -89,21 +90,23 @@ pub fn run(args: ShopwareArgs) -> ExitCode {
                 e.exit_code()
             }
         },
-        ShopwareCommand::Sync(SyncCommand::Sync(op)) => match sync::run(op) {
+        ShopwareCommand::Sync(SyncCommand::Pull(op)) => match sync::run(op) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 e.print();
                 e.exit_code()
             }
         },
-        ShopwareCommand::SyncLocal(op) => match sync_local::run(op) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                e.print();
-                e.exit_code()
+        ShopwareCommand::Sync(SyncCommand::Local(op)) | ShopwareCommand::SyncLocal(op) => {
+            match sync_local::run(op) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    e.print();
+                    e.exit_code()
+                }
             }
-        },
-        ShopwareCommand::Backup(BackupCommand::Backup(op)) => match backup::run(op) {
+        }
+        ShopwareCommand::Backup(BackupCommand::Create(op)) => match backup::run(op) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 e.print();

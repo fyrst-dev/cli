@@ -3,6 +3,9 @@
 //! Flag names and nesting follow `fyrst/shopware-cd` Flex overlay scripts
 //! (`deploy/init-env.sh`, `vps-release.sh`, `vps-rollback.sh`,
 //! `sync-runtime.sh`, `sync-runtime-local.sh`, `backup-runtime.sh`).
+//! Operator-facing verbs prefer `sync pull` / `backup create` / `sync local`;
+//! clap aliases keep overlay/script names (`sync sync`, `backup backup`,
+//! top-level `sync-local`).
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -15,22 +18,38 @@ Command tree:
   fyrst-cli shopware db import
   fyrst-cli shopware sync snapshot
   fyrst-cli shopware sync restore
-  fyrst-cli shopware sync sync
-  fyrst-cli shopware sync-local
-  fyrst-cli shopware backup backup
+  fyrst-cli shopware sync pull
+  fyrst-cli shopware sync local
+  fyrst-cli shopware backup create
   fyrst-cli shopware backup prune
   fyrst-cli shopware backup restore
 
+Aliases (overlay / script parity):
+  sync pull     = sync sync
+  sync local    = sync-local (top-level)
+  backup create = backup backup
+
+sync = between environments / workdir. backup = off-host disaster recovery.
+sync snapshot captures bind-mount trees for sync (not a retained backup).
+Keep restore on both: sync restore applies a snapshot; backup restore is DR.
+
+Live policy (refuse a live consumer unless):
+  db import         --allow-live or SYNC_ALLOW_LIVE_RESTORE=1
+  sync restore      SYNC_ALLOW_LIVE_RESTORE=1 only
+  sync pull         SYNC_ALLOW_LIVE_RESTORE=1 only
+  backup restore    confirm flag + BACKUP_ALLOW_LIVE_RESTORE=1
+                    (--i-understand-this-restores-this-host or BACKUP_CONFIRM_RESTORE=1)
+
 Dump = shopware-cli project dump only (fyrst-cli does not dump).
-Import = fyrst-cli shopware db import (also used by sync restore --data db and sync sync).
+Import = fyrst-cli shopware db import (also used by sync restore --data db and sync pull).
 init-env = fyrst-cli shopware init-env (shop-root .env after create + Flex).
 Release = fyrst-cli shopware release (VPS compose; never builds).
 Rollback = fyrst-cli shopware rollback (IMAGE_TAG from .previous-tag).
 Snapshot volumes = fyrst-cli shopware sync snapshot (bind-mount trees; not a dump).
 sync restore also restores bind-mount volumes and opt-in rewrite via compose web.
-sync sync = pull: rsync remote bind-mounts + import of an already-present dump (does not dump).
-sync-local = VPS → local project-dev rsync (never DB; not SHOPWARE_DATA_ROOT).
-Backup = fyrst-cli shopware backup backup (volumes + operator db.sql.gz; live allowed).
+sync pull = rsync remote bind-mounts + import of an already-present dump (does not dump).
+sync local = VPS → local project-dev rsync (never DB; not SHOPWARE_DATA_ROOT; --data all refused).
+Backup = fyrst-cli shopware backup create (volumes + operator db.sql.gz; live allowed).
 Backup prune = stamp-based retention under BACKUP_TARGET (BACKUP_KEEP_DAYS).
 backup restore = disaster recovery onto this host (confirmation required).
 Other verbs still exit 2 (not implemented). See docs/command-matrix.md.
@@ -51,9 +70,9 @@ Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap
 `shopware sync snapshot` copies bind-mount / volume trees; it is not a dump command. \
 `shopware sync restore` loads --snapshot-dir (same import module, bind-mount volumes, \
 opt-in rewrite via compose web). \
-`shopware sync sync` pulls from `--from` (rsync bind-mounts + import of an already-present dump) and does not dump. \
-`shopware sync-local` rsyncs VPS upload trees into a local project-dev checkout (never DB). \
-`shopware backup backup` copies bind-mount trees into BACKUP_TARGET (live allowed) \
+`shopware sync pull` (alias: `sync sync`) pulls from `--from` (rsync bind-mounts + import of an already-present dump) and does not dump. \
+`shopware sync local` (alias: `sync-local`) rsyncs VPS upload trees into a local project-dev checkout (never DB). \
+`shopware backup create` (alias: `backup backup`) copies bind-mount trees into BACKUP_TARGET (live allowed) \
 and never wraps dump. \
 `shopware backup prune` deletes stamp-named artifacts under BACKUP_TARGET. \
 `shopware backup restore` is disaster recovery onto this host (confirmation required). \
@@ -79,7 +98,8 @@ pub enum Command {
     subcommand_required = true,
     about = "Shopware CD operations",
     long_about = "Shopware CD operations. Names match Flex overlay scripts under \
-deploy/ in fyrst-dev/recipes (`fyrst/shopware-cd`).\n\n\
+deploy/ in fyrst-dev/recipes (`fyrst/shopware-cd`), with operator-facing aliases \
+documented in `shopware --help` (after_help).\n\n\
 `init-env` is implemented: finish shop-root `.env` after create + Flex (merge missing \
 keys from `.env.example`, shop id / deploy env, optional IMAGE / APP_SECRET, `--vps` \
 comments COMPOSE_PROJECT_NAME). `--dry-run` prints the plan and does not write. \
@@ -88,22 +108,22 @@ Passwords and APP_SECRET are never printed.\n\n\
 one-shot client image for DATABASE_URL). `sync restore` uses that same import module, \
 restores bind-mount volumes from --snapshot-dir, stops/starts web/worker/scheduler, and \
 runs opt-in `bin/console fyrst:sales-channel:rewrite-urls` via compose `web`. \
-`sync sync` is the cron/operator pull path: rsync remote bind-mounts onto this host, then \
+`sync pull` (alias `sync sync`) is the cron/operator pull path: rsync remote bind-mounts onto this host, then \
 import `db.sql.gz` from `--snapshot-dir` if `--data` includes db (does not dump). \
 `--from local` is a snapshot+restore pipeline check, not the staging cron path. \
 `release` is implemented: VPS `docker compose` pull + recreate \
 (`deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`). Never builds images. \
 `sync snapshot` copies bind-mount trees into --snapshot-dir/data/<item>/; it does not dump. \
-`sync-local` rsyncs VPS bind-mount trees into ./public/media, ./files, … (never the \
-database, never local SHOPWARE_DATA_ROOT). \
+`sync local` (alias `sync-local`) rsyncs VPS bind-mount trees into ./public/media, ./files, … (never the \
+database, never local SHOPWARE_DATA_ROOT). `--data all` is refused (all includes db on sync pull / backup create). \
 Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
 `rollback` is implemented: same compose files and order as `vps-release.sh`, with \
 IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).\n\n\
-`backup backup` copies bind-mount trees (and an operator-provided db.sql.gz) into \
+`backup create` (alias `backup backup`) copies bind-mount trees (and an operator-provided db.sql.gz) into \
 BACKUP_TARGET; it is allowed on live. \
 `backup prune` is implemented: stamp-based retention under BACKUP_TARGET \
 (BACKUP_KEEP_DAYS, default 14, 0 = keep forever). \
-`backup restore` fetches an artifact (`--from`) and applies it onto this host. It is not \
+`backup restore` fetches an artifact (`--artifact` / `--stamp`, alias `--from`) and applies it onto this host. It is not \
 live→staging sync. Confirmation is required (`--i-understand-this-restores-this-host` \
 or BACKUP_CONFIRM_RESTORE=1). Live needs BACKUP_ALLOW_LIVE_RESTORE=1.",
     after_help = SHOPWARE_COMMAND_TREE
@@ -125,13 +145,13 @@ pub enum ShopwareCommand {
     /// Import a SQL dump (shopware-cli has no import)
     #[command(subcommand)]
     Db(DbCommand),
-    /// Snapshot / restore / sync runtime data (deploy/sync-runtime.sh)
+    /// Snapshot / restore / pull / local runtime data (deploy/sync-runtime.sh)
     #[command(subcommand)]
     Sync(SyncCommand),
-    /// Pull VPS upload trees into a local project-dev checkout (deploy/sync-runtime-local.sh)
+    /// Alias of `sync local`: VPS upload trees → local project-dev (never DB)
     #[command(name = "sync-local")]
     SyncLocal(SyncLocalArgs),
-    /// Backup / prune / restore runtime artifacts (deploy/backup-runtime.sh)
+    /// Create / prune / restore runtime artifacts (deploy/backup-runtime.sh)
     #[command(subcommand)]
     Backup(BackupCommand),
 }
@@ -243,7 +263,10 @@ pub enum SyncCommand {
     /// Load --snapshot-dir onto this host (DB import + bind-mount volumes)
     Restore(SyncOpArgs),
     /// Pull from --from then apply locally (rsync + import; does not dump)
-    Sync(SyncOpArgs),
+    #[command(visible_alias = "sync")]
+    Pull(SyncOpArgs),
+    /// VPS upload trees → local project-dev checkout (never DB)
+    Local(SyncLocalArgs),
 }
 
 #[derive(Debug, Args)]
@@ -279,7 +302,7 @@ pub struct SyncLocalArgs {
     #[arg(long = "from", value_name = "ALIAS")]
     pub from: Option<String>,
 
-    /// Comma-separated subset, or "all" (media,files,thumbnail,theme,sitemap; not db)
+    /// Comma-separated subset (default: media,files,thumbnail,theme,sitemap; not db). `--data all` is refused
     #[arg(long = "data", value_name = "LIST")]
     pub data: Option<String>,
 
@@ -299,7 +322,8 @@ pub struct SyncLocalArgs {
 #[derive(Debug, Subcommand)]
 pub enum BackupCommand {
     /// Copy bind-mount trees (+ operator db.sql.gz) into BACKUP_TARGET (timestamped; live allowed)
-    Backup(BackupOpArgs),
+    #[command(visible_alias = "backup")]
+    Create(BackupOpArgs),
     /// Delete stamp-named artifacts older than BACKUP_KEEP_DAYS (also runs after backup)
     Prune(BackupOpArgs),
     /// Restore one artifact onto this host (disaster recovery; not sync)
@@ -323,12 +347,26 @@ pub struct BackupRestoreArgs {
     pub common: BackupOpArgs,
 
     /// Artifact timestamp or path under the shop/env prefix
-    #[arg(long = "from", value_name = "STAMP_OR_DIR")]
-    pub from: Option<String>,
+    #[arg(
+        long = "artifact",
+        visible_aliases = ["stamp", "from"],
+        value_name = "STAMP_OR_DIR"
+    )]
+    pub artifact: Option<String>,
 
     /// Required confirmation for restore (or BACKUP_CONFIRM_RESTORE=1)
     #[arg(long = "i-understand-this-restores-this-host")]
     pub confirm_restore: bool,
+}
+
+impl BackupRestoreArgs {
+    /// Stamp or directory path (`--artifact` / `--stamp` / `--from`).
+    pub fn artifact_spec(&self) -> Option<&str> {
+        self.artifact
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
 }
 
 #[cfg(test)]
@@ -342,7 +380,36 @@ mod tests {
     }
 
     #[test]
-    fn sync_sync_parses_flags() {
+    fn sync_pull_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "sync",
+            "pull",
+            "--from",
+            "live",
+            "--data",
+            "media,files",
+            "--dry-run",
+            "--skip-db",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Sync(SyncCommand::Pull(op)),
+            }) => {
+                assert_eq!(op.from.as_deref(), Some("live"));
+                assert_eq!(op.data.as_deref(), Some("media,files"));
+                assert!(op.dry_run);
+                assert!(op.skip_db);
+                assert!(!op.skip_volumes);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_sync_alias_parses_as_pull() {
         let cli = Cli::try_parse_from([
             "fyrst-cli",
             "shopware",
@@ -358,15 +425,14 @@ mod tests {
         .unwrap();
         match cli.command {
             Command::Shopware(ShopwareArgs {
-                command: ShopwareCommand::Sync(SyncCommand::Sync(op)),
+                command: ShopwareCommand::Sync(SyncCommand::Pull(op)),
             }) => {
                 assert_eq!(op.from.as_deref(), Some("live"));
                 assert_eq!(op.data.as_deref(), Some("media,files"));
                 assert!(op.dry_run);
                 assert!(op.skip_db);
-                assert!(!op.skip_volumes);
             }
-            other => panic!("unexpected parse: {other:?}"),
+            other => panic!("alias should parse as pull: {other:?}"),
         }
     }
 
@@ -422,17 +488,25 @@ mod tests {
         }
 
         let sync = shopware.find_subcommand("sync").unwrap();
-        for name in ["snapshot", "restore", "sync"] {
+        for name in ["snapshot", "restore", "pull", "local"] {
             assert!(sync.find_subcommand(name).is_some(), "missing sync {name}");
         }
+        assert!(
+            sync.find_subcommand("sync").is_some(),
+            "missing overlay alias sync sync",
+        );
 
         let backup = shopware.find_subcommand("backup").unwrap();
-        for name in ["backup", "prune", "restore"] {
+        for name in ["create", "prune", "restore"] {
             assert!(
                 backup.find_subcommand(name).is_some(),
                 "missing backup {name}",
             );
         }
+        assert!(
+            backup.find_subcommand("backup").is_some(),
+            "missing overlay alias backup backup",
+        );
 
         let db = shopware.find_subcommand("db").unwrap();
         assert!(
@@ -541,7 +615,38 @@ mod tests {
     }
 
     #[test]
-    fn sync_local_parses_flags() {
+    fn sync_local_nested_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "sync",
+            "local",
+            "--from",
+            "live",
+            "--data",
+            "media,files",
+            "--remote-data-root",
+            "/data",
+            "--delete",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Sync(SyncCommand::Local(op)),
+            }) => {
+                assert_eq!(op.from.as_deref(), Some("live"));
+                assert_eq!(op.data.as_deref(), Some("media,files"));
+                assert_eq!(op.remote_data_root.as_deref(), Some("/data"));
+                assert!(op.delete);
+                assert!(op.dry_run);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_local_top_level_alias_parses_flags() {
         let cli = Cli::try_parse_from([
             "fyrst-cli",
             "shopware",
@@ -571,7 +676,30 @@ mod tests {
     }
 
     #[test]
-    fn backup_backup_parses_flags() {
+    fn backup_create_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "backup",
+            "create",
+            "--data",
+            "media,db",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Backup(BackupCommand::Create(op)),
+            }) => {
+                assert_eq!(op.data.as_deref(), Some("media,db"));
+                assert!(op.dry_run);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn backup_backup_alias_parses_as_create() {
         let cli = Cli::try_parse_from([
             "fyrst-cli",
             "shopware",
@@ -584,12 +712,12 @@ mod tests {
         .unwrap();
         match cli.command {
             Command::Shopware(ShopwareArgs {
-                command: ShopwareCommand::Backup(BackupCommand::Backup(op)),
+                command: ShopwareCommand::Backup(BackupCommand::Create(op)),
             }) => {
                 assert_eq!(op.data.as_deref(), Some("media,db"));
                 assert!(op.dry_run);
             }
-            other => panic!("unexpected parse: {other:?}"),
+            other => panic!("alias should parse as create: {other:?}"),
         }
     }
 
@@ -616,14 +744,28 @@ mod tests {
         }
     }
 
+    fn assert_backup_restore_artifact(cli: Cli, spec: &str) {
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Backup(BackupCommand::Restore(op)),
+            }) => {
+                assert_eq!(op.artifact_spec(), Some(spec));
+                assert_eq!(op.common.data.as_deref(), Some("db"));
+                assert!(op.common.dry_run);
+                assert!(op.confirm_restore);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
     #[test]
-    fn backup_restore_parses_flags() {
+    fn backup_restore_parses_artifact_flag() {
         let cli = Cli::try_parse_from([
             "fyrst-cli",
             "shopware",
             "backup",
             "restore",
-            "--from",
+            "--artifact",
             "20260912T020000Z",
             "--data",
             "db",
@@ -631,16 +773,26 @@ mod tests {
             "--i-understand-this-restores-this-host",
         ])
         .unwrap();
-        match cli.command {
-            Command::Shopware(ShopwareArgs {
-                command: ShopwareCommand::Backup(BackupCommand::Restore(op)),
-            }) => {
-                assert_eq!(op.from.as_deref(), Some("20260912T020000Z"));
-                assert_eq!(op.common.data.as_deref(), Some("db"));
-                assert!(op.common.dry_run);
-                assert!(op.confirm_restore);
-            }
-            other => panic!("unexpected parse: {other:?}"),
+        assert_backup_restore_artifact(cli, "20260912T020000Z");
+    }
+
+    #[test]
+    fn backup_restore_parses_stamp_and_from_aliases() {
+        for flag in ["--stamp", "--from"] {
+            let cli = Cli::try_parse_from([
+                "fyrst-cli",
+                "shopware",
+                "backup",
+                "restore",
+                flag,
+                "20260912T020000Z",
+                "--data",
+                "db",
+                "--dry-run",
+                "--i-understand-this-restores-this-host",
+            ])
+            .unwrap();
+            assert_backup_restore_artifact(cli, "20260912T020000Z");
         }
     }
 }
