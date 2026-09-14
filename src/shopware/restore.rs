@@ -1,5 +1,5 @@
-//! `fyrst-cli shopware sync restore` — DB import plus bind-mount volumes and
-//! post-restore orchestration (stop/start, opt-in rewrite, cache:clear hint,
+//! `fyrst-cli shopware sync apply` — DB import plus bind-mount volumes and
+//! post-apply orchestration (stop/start, opt-in rewrite, cache:clear hint,
 //! `SYNC_POST_RESTORE_CMD`).
 //!
 //! Database import is the same module as `shopware db import`. Rewrite is
@@ -102,7 +102,7 @@ pub fn plan(
     plan_with_env(&env, cwd, &snapshot_dir, &selection, args.dry_run)
 }
 
-/// Inner apply used by `shopware sync restore` and `shopware backup restore`.
+/// Inner apply used by `shopware sync apply` and `shopware backup recover`.
 pub fn apply_from_env(
     env: &ShopEnv,
     cwd: &Path,

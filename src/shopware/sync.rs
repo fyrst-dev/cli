@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 pub fn dump_operator_instructions(snapshot_dir: &Path) -> String {
     format!(
-        "No db.sql.gz (or db.sql) in {}. fyrst-cli does not dump databases and does not wrap or shell out to shopware-cli (no `docker run … project dump`). On the source, run `shopware-cli project dump` (example: shopware-cli project dump --skip-lock-tables --compression=gzip --output db.sql.gz) and place db.sql.gz in that directory. Then re-run `fyrst-cli shopware sync pull`, or import with: fyrst-cli shopware db import --file <path.sql|.sql.gz> (same module as `sync restore --data db`).",
+        "No db.sql.gz (or db.sql) in {}. fyrst-cli does not dump databases and does not wrap or shell out to shopware-cli (no `docker run … project dump`). On the source, run `shopware-cli project dump` (example: shopware-cli project dump --skip-lock-tables --compression=gzip --output db.sql.gz) and place db.sql.gz in that directory. Then re-run `fyrst-cli shopware sync pull`, or import with: fyrst-cli shopware db import --file <path.sql|.sql.gz> (same module as `sync apply --data db`).",
         snapshot_dir.display()
     )
 }
@@ -98,7 +98,7 @@ fn run_with(
 
     if local {
         println!(
-            "==> sync --from local snapshots this host then restores the same files (pipeline check). Prefer --from <live-alias> on staging."
+            "==> sync --from local captures this host then applies the same files (pipeline check). Prefer --from <live-alias> on staging."
         );
         return run_local(
             &env,
@@ -277,17 +277,20 @@ fn resolve_remote_data_root(
         );
         return Ok(p);
     }
-    let probed = remote_bash(ssh, "printf %s \"${SYNC_DATA_ROOT:-${SHOPWARE_DATA_ROOT:-}}\"")
-        .ok()
-        .and_then(|out| {
-            let s = String::from_utf8_lossy(&out.stdout);
-            s.lines()
-                .map(|l| l.trim().trim_end_matches('\r'))
-                .filter(|l| !l.is_empty())
-                .last()
-                .map(str::to_string)
-        })
-        .filter(|s| !s.is_empty());
+    let probed = remote_bash(
+        ssh,
+        "printf %s \"${SYNC_DATA_ROOT:-${SHOPWARE_DATA_ROOT:-}}\"",
+    )
+    .ok()
+    .and_then(|out| {
+        let s = String::from_utf8_lossy(&out.stdout);
+        s.lines()
+            .map(|l| l.trim().trim_end_matches('\r'))
+            .filter(|l| !l.is_empty())
+            .last()
+            .map(str::to_string)
+    })
+    .filter(|s| !s.is_empty());
     if let Some(p) = probed {
         println!("==> Remote bind-mount root: {p}");
         return Ok(PathBuf::from(p));

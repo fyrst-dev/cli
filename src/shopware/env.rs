@@ -219,12 +219,12 @@ pub fn looks_like_shop_root(dir: &Path) -> bool {
     dir.join(".env").is_file() && has_deploy_marker(dir)
 }
 
-/// `init-env` may run before `.env` exists (copy from `.env.example`).
+/// `env init` may run before `.env` exists (copy from `.env.example`).
 pub fn looks_like_shop_root_init(dir: &Path) -> bool {
     (dir.join(".env").is_file() || dir.join(".env.example").is_file()) && has_deploy_marker(dir)
 }
 
-/// Shop checkout for `init-env`. Unlike [`resolve_compose_dir`], `.env` may still
+/// Shop checkout for `env init`. Unlike [`resolve_compose_dir`], `.env` may still
 /// be missing when `.env.example` is present. `COMPOSE_DIR` need only be a directory.
 pub fn resolve_compose_dir_init(
     process: &HashMap<String, String>,
@@ -315,7 +315,7 @@ pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
     }
 }
 
-/// Work directory for sync snapshot/restore (`--snapshot-dir` or `SYNC_SNAPSHOT_DIR`).
+/// Work directory for sync capture/apply (`--snapshot-dir` or `SYNC_SNAPSHOT_DIR`).
 pub fn resolve_snapshot_dir(cli_dir: Option<&str>, env: &ShopEnv, compose_dir: &Path) -> PathBuf {
     if let Some(d) = cli_dir.map(str::trim).filter(|s| !s.is_empty()) {
         let p = PathBuf::from(d);
@@ -372,7 +372,7 @@ pub fn local_data_root(env: &ShopEnv) -> Result<(PathBuf, bool), Error> {
     Ok((derived_data_root(env, &shop_id, deploy_env), true))
 }
 
-/// Alias used by `sync restore` (same resolution as snapshot).
+/// Alias used by `sync apply` (same resolution as capture).
 pub fn resolve_data_root(env: &ShopEnv) -> Result<PathBuf, Error> {
     derive_local_data_root(env)
 }

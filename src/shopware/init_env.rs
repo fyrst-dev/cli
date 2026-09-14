@@ -1,4 +1,4 @@
-//! `fyrst-cli shopware init-env` — finish shop-root `.env` after create + Flex.
+//! `fyrst-cli shopware env init` — finish shop-root `.env` after create + Flex.
 //!
 //! Behaviour matches fyrst-dev/recipes `deploy/init-env.sh`. Does not overwrite
 //! the whole file, does not invent MYSQL passwords or `APP_URL`, and never

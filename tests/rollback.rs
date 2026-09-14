@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware rollback`.
+//! Integration tests for `fyrst-cli shopware deploy rollback`.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -130,7 +130,7 @@ fn rollback_with_path(
         }
         cmd.env("PATH", path);
     }
-    cmd.args(["shopware", "rollback"]);
+    cmd.args(["shopware", "deploy", "rollback"]);
     cmd.args(extra);
     cmd.output()
         .unwrap_or_else(|e| panic!("failed to run rollback {extra:?}: {e}"))
@@ -147,7 +147,7 @@ fn stderr(out: &Output) -> String {
 #[test]
 fn rollback_help_lists_flags() {
     let out = bin()
-        .args(["shopware", "rollback", "--help"])
+        .args(["shopware", "deploy", "rollback", "--help"])
         .output()
         .unwrap();
     assert!(out.status.success());

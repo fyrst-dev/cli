@@ -277,27 +277,3 @@ fn data_all_is_refused() {
     assert!(err.contains("includes db"), "{err}");
     assert!(!stdout(&out).contains("DRY-RUN rsync"), "{}", stdout(&out));
 }
-
-#[test]
-fn top_level_sync_local_alias_still_runs() {
-    let shop = TempShop::new("alias");
-    shop.write_min_shop();
-    let mut cmd = bin();
-    cmd.current_dir(shop.path());
-    cmd.env("COMPOSE_DIR", shop.path());
-    for k in LEAK_KEYS {
-        if *k != "COMPOSE_DIR" {
-            cmd.env_remove(k);
-        }
-    }
-    let out = cmd
-        .args(["shopware", "sync-local", "--dry-run", "--data", "media"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
-    assert!(
-        stdout(&out).contains(" → ./public/media/"),
-        "{}",
-        stdout(&out)
-    );
-}

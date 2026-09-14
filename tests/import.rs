@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware db import` and sync restore DB.
+//! Integration tests for `fyrst-cli shopware db import` and sync apply DB.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -112,7 +112,7 @@ fn restore(shop: &Path, extra: &[&str]) -> Output {
             cmd.env_remove(k);
         }
     }
-    cmd.args(["shopware", "sync", "restore"]);
+    cmd.args(["shopware", "sync", "apply"]);
     cmd.args(extra);
     cmd.output()
         .unwrap_or_else(|e| panic!("failed to run restore {extra:?}: {e}"))

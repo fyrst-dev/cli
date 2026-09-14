@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware sync snapshot` (volumes; no dump wrap).
+//! Integration tests for `fyrst-cli shopware sync capture` (volumes; no dump wrap).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,7 +99,7 @@ fn snapshot(shop: &Path, extra: &[&str]) -> Output {
             cmd.env_remove(k);
         }
     }
-    cmd.args(["shopware", "sync", "snapshot"]);
+    cmd.args(["shopware", "sync", "capture"]);
     cmd.args(extra);
     cmd.output()
         .unwrap_or_else(|e| panic!("failed to run snapshot {extra:?}: {e}"))
@@ -110,7 +110,7 @@ fn snapshot_cwd(extra: &[&str]) -> Output {
     for k in LEAK_KEYS {
         cmd.env_remove(k);
     }
-    cmd.args(["shopware", "sync", "snapshot"]);
+    cmd.args(["shopware", "sync", "capture"]);
     cmd.args(extra);
     cmd.output()
         .unwrap_or_else(|e| panic!("failed to run snapshot {extra:?}: {e}"))
@@ -154,7 +154,7 @@ fn assert_no_dump_wrap(out: &Output) {
 #[test]
 fn snapshot_help_lists_flags() {
     let out = bin()
-        .args(["shopware", "sync", "snapshot", "--help"])
+        .args(["shopware", "sync", "capture", "--help"])
         .output()
         .unwrap();
     assert!(out.status.success());

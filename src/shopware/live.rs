@@ -1,6 +1,6 @@
 //! Live-host refuse guards (recipes `lib/sync-live.sh`).
 //!
-//! `shopware sync restore` matches the overlay: refuse when the consumer looks
+//! `shopware sync apply` matches the overlay: refuse when the consumer looks
 //! live unless `SYNC_ALLOW_LIVE_RESTORE=1`.
 //!
 //! Standalone `shopware db import` uses the same live detection but allows an
@@ -16,7 +16,7 @@ use std::process::Command;
 pub enum LivePolicy {
     /// Standalone import: refuse live unless `--allow-live` or env `1`.
     DbImport { allow_live_flag: bool },
-    /// `sync restore` / `sync pull`: refuse live unless `SYNC_ALLOW_LIVE_RESTORE=1`.
+    /// `sync apply` / `sync pull`: refuse live unless `SYNC_ALLOW_LIVE_RESTORE=1`.
     SyncRestore,
 }
 

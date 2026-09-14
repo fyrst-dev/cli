@@ -1,4 +1,4 @@
-//! Integration tests for `fyrst-cli shopware init-env`.
+//! Integration tests for `fyrst-cli shopware env init`.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -63,10 +63,10 @@ fn init_env(shop: &Path, extra: &[&str]) -> Output {
             cmd.env_remove(k);
         }
     }
-    cmd.args(["shopware", "init-env"]);
+    cmd.args(["shopware", "env", "init"]);
     cmd.args(extra);
     cmd.output()
-        .unwrap_or_else(|e| panic!("failed to run init-env {extra:?}: {e}"))
+        .unwrap_or_else(|e| panic!("failed to run env init {extra:?}: {e}"))
 }
 
 fn stdout(out: &Output) -> String {
@@ -99,7 +99,7 @@ fn assert_no_secrets(out: &Output, extras: &[&str]) {
 #[test]
 fn init_env_help_lists_flags() {
     let out = bin()
-        .args(["shopware", "init-env", "--help"])
+        .args(["shopware", "env", "init", "--help"])
         .output()
         .unwrap();
     assert!(out.status.success(), "stderr={}", stderr(&out));
@@ -117,7 +117,7 @@ fn init_env_help_lists_flags() {
     }
     assert!(
         !help.to_ascii_lowercase().contains("wrap dump"),
-        "init-env --help must not wrap dump:\n{help}"
+        "env init --help must not wrap dump:\n{help}"
     );
 }
 
@@ -367,7 +367,7 @@ fn xtrace_env_is_refused() {
     cmd.current_dir(shop.path());
     cmd.env("COMPOSE_DIR", shop.path());
     cmd.env("BASH_XTRACEFD", "2");
-    cmd.args(["shopware", "init-env", "--dry-run"]);
+    cmd.args(["shopware", "env", "init", "--dry-run"]);
     let out = cmd.output().unwrap();
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
     let err = stderr(&out);

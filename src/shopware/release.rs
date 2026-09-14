@@ -1,8 +1,8 @@
-//! `fyrst-cli shopware release` — VPS image pull + Compose recreate.
+//! `fyrst-cli shopware deploy release` — VPS image pull + Compose recreate.
 //!
 //! Matches recipes `deploy/vps-release.sh`. Never builds images or compiles
 //! themes/assets. Auto-rollback on smoke failure uses the shared rollout
-//! helper (`fyrst-cli shopware rollback` is the operator command).
+//! helper (`fyrst-cli shopware deploy rollback` is the operator command).
 
 use super::env::{resolve_compose_dir, ShopEnv};
 use super::error::Error;

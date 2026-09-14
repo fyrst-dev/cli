@@ -1,4 +1,4 @@
-//! `fyrst-cli shopware sync snapshot` — bind-mount / volume trees, not a dump.
+//! `fyrst-cli shopware sync capture` — bind-mount / volume trees, not a dump.
 //!
 //! Database dumps are owned by `shopware-cli project dump`. This command does
 //! not dump, wrap, or shell out to shopware-cli. When `--data` includes `db`,

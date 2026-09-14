@@ -1,10 +1,10 @@
-//! `fyrst-cli shopware backup restore` — disaster recovery onto this host.
+//! `fyrst-cli shopware backup recover` — disaster recovery onto this host.
 //!
-//! Not `sync restore` (live→staging clone). `--artifact` (aliases `--stamp`,
+//! Not `sync apply` (live→staging clone). `--artifact` (aliases `--stamp`,
 //! `--from`) and confirmation are required. Live needs
 //! `BACKUP_ALLOW_LIVE_RESTORE=1`; inner apply then sets
 //! `SYNC_ALLOW_LIVE_RESTORE=1`. DB import and bind-mount apply reuse the sync
-//! restore module. fyrst-cli does not dump.
+//! apply module. fyrst-cli does not dump.
 
 use super::data::normalize_data;
 use super::env::{
@@ -17,13 +17,13 @@ use super::target::{
     artifact_relpath, parse_backup_target, resolve_local_target_path, BackupTarget,
 };
 use super::volumes::command_exists;
-use crate::cli::BackupRestoreArgs;
+use crate::cli::BackupRecoverArgs;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn run(args: BackupRestoreArgs) -> Result<(), Error> {
+pub fn run(args: BackupRecoverArgs) -> Result<(), Error> {
     let process_env: HashMap<String, String> = std::env::vars().collect();
     let cwd = std::env::current_dir().map_err(|e| Error::fail(format!("cannot read cwd: {e}")))?;
     let compose_dir = resolve_compose_dir(&process_env, &cwd)?;
@@ -45,7 +45,7 @@ fn looks_like_path(spec: &str) -> bool {
 }
 
 pub(crate) fn restore_from_args(
-    args: &BackupRestoreArgs,
+    args: &BackupRecoverArgs,
     env: &mut ShopEnv,
     cwd: &Path,
 ) -> Result<(), Error> {
@@ -66,7 +66,7 @@ pub(crate) fn restore_from_args(
         ));
     }
 
-    // Overlay always sets this for inner `sync restore` so the existing live
+    // Overlay always sets this for inner `sync apply` so the existing live
     // guard allows DR (hostname/checkout named live on a staging drill too).
     env.set("SYNC_ALLOW_LIVE_RESTORE", "1");
 
@@ -295,8 +295,8 @@ mod tests {
         confirm: bool,
         dry_run: bool,
         data: Option<&str>,
-    ) -> BackupRestoreArgs {
-        BackupRestoreArgs {
+    ) -> BackupRecoverArgs {
+        BackupRecoverArgs {
             common: BackupOpArgs {
                 data: data.map(str::to_string),
                 dry_run,

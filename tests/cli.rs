@@ -25,19 +25,16 @@ fn run(args: &[&str]) -> std::process::Output {
 fn shopware_help_prints_command_tree() {
     let help = stdout(&["shopware", "--help"]);
     for needle in [
-        "init-env",
-        "release",
-        "rollback",
-        "sync",
-        "sync-local",
-        "backup",
+        "env init",
+        "deploy release",
+        "deploy rollback",
         "fyrst-cli shopware db import",
-        "fyrst-cli shopware sync snapshot",
+        "fyrst-cli shopware sync capture",
+        "fyrst-cli shopware sync apply",
         "fyrst-cli shopware sync pull",
         "fyrst-cli shopware sync local",
         "fyrst-cli shopware backup create",
-        "fyrst-cli shopware backup restore",
-        "not implemented",
+        "fyrst-cli shopware backup recover",
         "shopware-cli",
         "Dump = shopware-cli",
         "Import = fyrst-cli",
@@ -45,22 +42,38 @@ fn shopware_help_prints_command_tree() {
         "Live policy",
         "SYNC_ALLOW_LIVE_RESTORE",
         "BACKUP_ALLOW_LIVE_RESTORE",
+        "sync = between environments / workdir",
+        "backup = off-host disaster recovery",
     ] {
         assert!(
             help.contains(needle),
             "shopware --help missing `{needle}`:\n{help}",
         );
     }
+    for gone in [
+        "init-env",
+        "sync-local",
+        "sync snapshot",
+        "sync restore",
+        "backup restore",
+        "sync sync",
+        "backup backup",
+    ] {
+        assert!(
+            !help.contains(gone),
+            "shopware --help still lists old path `{gone}`:\n{help}",
+        );
+    }
     assert!(
-        !help.contains("sync snapshot` dumps the local DB"),
-        "help still presents snapshot as a dump wrap:\n{help}",
+        !help.contains("sync capture` dumps the local DB"),
+        "help still presents capture as a dump wrap:\n{help}",
     );
 }
 
 #[test]
 fn dump_is_absent_from_cli_surface() {
     let shopware = stdout(&["shopware", "--help"]);
-    let snapshot = stdout(&["shopware", "sync", "snapshot", "--help"]);
+    let capture = stdout(&["shopware", "sync", "capture", "--help"]);
     let db = stdout(&["shopware", "db", "--help"]);
     let import = stdout(&["shopware", "db", "import", "--help"]);
 
@@ -69,14 +82,14 @@ fn dump_is_absent_from_cli_surface() {
         "shopware --help missing db import:\n{shopware}",
     );
     assert!(
-        snapshot.contains("shopware-cli"),
-        "snapshot --help should point at shopware-cli:\n{snapshot}",
+        capture.contains("shopware-cli"),
+        "capture --help should point at shopware-cli:\n{capture}",
     );
     assert!(
-        !snapshot
+        !capture
             .to_ascii_lowercase()
             .contains("dump db via shopware-cli"),
-        "snapshot --help still describes wrapping dump:\n{snapshot}",
+        "capture --help still describes wrapping dump:\n{capture}",
     );
     assert!(db.contains("import"), "shopware db --help:\n{db}");
     for needle in ["--file", "--dry-run", "--allow-live"] {
@@ -111,9 +124,9 @@ fn dump_is_absent_from_cli_surface() {
 }
 
 #[test]
-fn sync_help_lists_snapshot_restore_pull_local() {
+fn sync_help_lists_capture_apply_pull_local() {
     let help = stdout(&["shopware", "sync", "--help"]);
-    for needle in ["snapshot", "restore", "pull", "local"] {
+    for needle in ["capture", "apply", "pull", "local"] {
         assert!(
             help.contains(needle),
             "shopware sync --help missing `{needle}`:\n{help}",
@@ -124,15 +137,37 @@ fn sync_help_lists_snapshot_restore_pull_local() {
             .any(|l| l.split_whitespace().next() == Some("pull")),
         "shopware sync --help missing nested `pull` verb:\n{help}",
     );
-    assert!(
-        help.contains("sync"),
-        "shopware sync --help should mention overlay alias `sync`:\n{help}",
-    );
+    for gone in ["snapshot", "restore"] {
+        assert!(
+            help.lines()
+                .all(|l| l.split_whitespace().next() != Some(gone)),
+            "shopware sync --help still lists old verb `{gone}`:\n{help}",
+        );
+    }
 }
 
 #[test]
-fn backup_restore_help_lists_flags_and_does_not_wrap_dump() {
-    let help = stdout(&["shopware", "backup", "restore", "--help"]);
+fn env_and_deploy_help_list_nested_verbs() {
+    let env = stdout(&["shopware", "env", "--help"]);
+    assert!(
+        env.lines()
+            .any(|l| l.split_whitespace().next() == Some("init")),
+        "shopware env --help missing `init`:\n{env}",
+    );
+    let deploy = stdout(&["shopware", "deploy", "--help"]);
+    for needle in ["release", "rollback"] {
+        assert!(
+            deploy
+                .lines()
+                .any(|l| l.split_whitespace().next() == Some(needle)),
+            "shopware deploy --help missing `{needle}`:\n{deploy}",
+        );
+    }
+}
+
+#[test]
+fn backup_recover_help_lists_flags_and_does_not_wrap_dump() {
+    let help = stdout(&["shopware", "backup", "recover", "--help"]);
     for needle in [
         "--artifact",
         "--stamp",
@@ -143,29 +178,53 @@ fn backup_restore_help_lists_flags_and_does_not_wrap_dump() {
     ] {
         assert!(
             help.contains(needle),
-            "backup restore --help missing `{needle}`:\n{help}",
+            "backup recover --help missing `{needle}`:\n{help}",
         );
     }
     let lower = help.to_ascii_lowercase();
     assert!(
         !lower.contains("shopware-cli project dump") || help.contains("does not dump"),
-        "backup restore --help must not wrap dump:\n{help}",
+        "backup recover --help must not wrap dump:\n{help}",
     );
 }
 
 #[test]
-fn backup_help_lists_create_prune_restore() {
+fn backup_help_lists_create_prune_recover() {
     let help = stdout(&["shopware", "backup", "--help"]);
-    for needle in ["create", "prune", "restore"] {
+    for needle in ["create", "prune", "recover"] {
         assert!(
             help.contains(needle),
             "shopware backup --help missing `{needle}`:\n{help}",
         );
     }
     assert!(
-        help.contains("backup"),
-        "shopware backup --help should mention overlay alias `backup`:\n{help}",
+        help.lines()
+            .all(|l| l.split_whitespace().next() != Some("restore")),
+        "shopware backup --help still lists old `restore` verb:\n{help}",
     );
+}
+
+#[test]
+fn old_paths_are_rejected() {
+    let cases: &[&[&str]] = &[
+        &["shopware", "init-env"],
+        &["shopware", "release"],
+        &["shopware", "rollback"],
+        &["shopware", "sync-local"],
+        &["shopware", "sync", "snapshot"],
+        &["shopware", "sync", "restore"],
+        &["shopware", "sync", "sync"],
+        &["shopware", "backup", "backup"],
+        &["shopware", "backup", "restore"],
+    ];
+    for args in cases {
+        let out = run(args);
+        assert_ne!(
+            out.status.code(),
+            Some(0),
+            "old path unexpectedly succeeded for {args:?}"
+        );
+    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! Shared VPS rollout helpers (recipes `deploy/lib/vps-common.sh`).
 //!
-//! Used by `shopware release` and `shopware rollback`.
+//! Used by `shopware deploy release` and `shopware deploy rollback`.
 
 use super::compose::{
     args_contain_build, compose_service_names, docker_log, extend_profiles,
@@ -20,7 +20,8 @@ pub const SMOKE_SLEEP: Duration = Duration::from_secs(2);
 
 /// Operator one-liner printed on smoke failure (fyrst-cli equivalent of overlay
 /// `IMAGE_TAG=$(cat .previous-tag) bash deploy/vps-rollback.sh`).
-pub const ROLLBACK_ONE_LINER: &str = "IMAGE_TAG=$(cat .previous-tag) fyrst-cli shopware rollback";
+pub const ROLLBACK_ONE_LINER: &str =
+    "IMAGE_TAG=$(cat .previous-tag) fyrst-cli shopware deploy rollback";
 
 pub fn env_truthy(v: &str) -> bool {
     matches!(
@@ -493,7 +494,7 @@ pub fn smoke_fail_message(url: &str) -> String {
 }
 
 /// Re-run the same compose order at `image_tag` (release auto-rollback).
-/// Does not implement `fyrst-cli shopware rollback` (#5).
+/// Shared helper used by `fyrst-cli shopware deploy rollback`.
 pub fn rollout_to_tag(ctx: &mut VpsContext, image_tag: String) -> Result<(), Error> {
     ctx.image_tag = image_tag;
     let plan = ctx.plan();
@@ -607,7 +608,7 @@ mod tests {
         let m = smoke_fail_message("http://127.0.0.1:8000");
         assert!(m.contains("http://127.0.0.1:8000"), "{m}");
         assert!(m.contains(ROLLBACK_ONE_LINER), "{m}");
-        assert!(m.contains("fyrst-cli shopware rollback"), "{m}");
+        assert!(m.contains("fyrst-cli shopware deploy rollback"), "{m}");
         assert!(!m.contains("DATABASE_URL"), "{m}");
     }
 
