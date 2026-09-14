@@ -87,14 +87,16 @@ fyrst-cli shopware backup recover          # recover this host from an artifact
 
 `fyrst-cli shopware --help` lists the same tree.
 
-### Overlay wrappers
+### Overlay scripts (removed)
 
-The Flex overlay still ships these `deploy/*.sh` names so CI and cron stay
-unchanged. The files are stubs around a dispatcher; **filenames are
-unchanged**. Implementation is this CLI. **Dump stays `shopware-cli project
-dump`.** There is no `deploy/lib/sync-dump.sh`.
+Operator path is **fyrst-cli only**. Install this CLI on each VPS (see
+[Install](#install)). The Flex overlay no longer ships `deploy/*.sh` wrappers
+or a dispatcher. Names below are **historical**. Overlay verbs
+(`snapshot` / `backup` / `restore`) are retired — use the lifecycle verbs.
 
-| Overlay stub | fyrst-cli |
+**Dump stays `shopware-cli project dump`.** There is no `deploy/lib/sync-dump.sh`.
+
+| Historical overlay (removed) | Operator command |
 | --- | --- |
 | `deploy/init-env.sh` | `fyrst-cli shopware env init` |
 | `deploy/vps-release.sh` | `fyrst-cli shopware deploy release` |
