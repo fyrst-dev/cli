@@ -47,8 +47,8 @@ pub fn has_key(contents: &str, key: &str) -> bool {
 pub const MERGE_FROM_EXAMPLE_HEADER: &str =
     "# --- missing keys merged from .env.example by deploy/init-env.sh ---";
 
-pub const VPS_COMMENT_SUFFIX: &str =
-    " # commented by deploy/init-env.sh --vps (restore for local project dev)";
+pub const COMPOSE_PROJECT_NAME_COMMENT_SUFFIX: &str =
+    " # commented by deploy/init-env.sh (restore for local project dev)";
 
 /// Replace every uncommented `KEY=` line, or append `KEY=value`.
 /// Preserves an `export` prefix. Does not quote `value` (overlay `env_set_key`).
@@ -83,7 +83,7 @@ pub fn set_key(contents: &str, key: &str, value: &str) -> String {
     out
 }
 
-/// Comment uncommented `COMPOSE_PROJECT_NAME=` lines (overlay `--vps`).
+/// Comment uncommented `COMPOSE_PROJECT_NAME=` lines (create footgun).
 /// Returns the rewritten file and how many lines were commented.
 pub fn comment_compose_project_name(contents: &str) -> (String, usize) {
     let mut out = String::new();
@@ -93,7 +93,7 @@ pub fn comment_compose_project_name(contents: &str) -> (String, usize) {
         if uncommented_assignment(line, "COMPOSE_PROJECT_NAME").is_some() {
             out.push_str("# ");
             out.push_str(line);
-            out.push_str(VPS_COMMENT_SUFFIX);
+            out.push_str(COMPOSE_PROJECT_NAME_COMMENT_SUFFIX);
             out.push('\n');
             n += 1;
         } else {
@@ -331,12 +331,13 @@ MYSQL_PASSWORD=s3cret
         assert!(!out
             .lines()
             .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
-        assert!(out.contains(
-            "# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by deploy/init-env.sh --vps"
-        ));
-        assert!(out.contains(
-            "# export COMPOSE_PROJECT_NAME=other # commented by deploy/init-env.sh --vps"
-        ));
+        assert!(
+            out.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by deploy/init-env.sh")
+        );
+        assert!(
+            out.contains("# export COMPOSE_PROJECT_NAME=other # commented by deploy/init-env.sh")
+        );
+        assert!(!out.contains("--vps"));
         assert!(out.contains("# COMPOSE_PROJECT_NAME=keep-commented"));
         assert!(out.contains("MYSQL_PASSWORD=s3cret"));
         assert!(!out.contains("COMPOSE_PROJECT_NAME=\n"));

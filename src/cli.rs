@@ -94,8 +94,8 @@ pub enum Command {
 deploy (VPS compose), db (SQL import), sync (between environments / workdir), \
 backup (off-host disaster recovery).\n\n\
 `env init` is implemented: finish shop-root `.env` after create + Flex (merge missing \
-keys from `.env.example`, shop id / deploy env, optional IMAGE, `--vps` \
-comments COMPOSE_PROJECT_NAME). Does not generate APP_SECRET. `--dry-run` prints the \
+keys from `.env.example`, shop id / deploy env, optional IMAGE; always comments out \
+COMPOSE_PROJECT_NAME). Does not generate APP_SECRET. `--dry-run` prints the \
 plan and does not write. Passwords are never printed.\n\n\
 `db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
 one-shot client image for DATABASE_URL). `sync apply` uses that same import module, \
@@ -182,13 +182,16 @@ impl DeployEnv {
 #[derive(Debug, Args)]
 #[command(
     after_help = "Does not overwrite the whole .env. Does not invent MYSQL passwords or APP_URL. \
-Does not generate APP_SECRET (shopware-cli project create writes that).\n\n\
+Does not generate APP_SECRET (shopware-cli project create writes that). \
+Always comments out uncommented COMPOSE_PROJECT_NAME=… lines (create writes \
+COMPOSE_PROJECT_NAME=sw-…; Compose SoT is SHOPWARE_SHOP_ID + SHOPWARE_DEPLOY_ENV). \
+Does not leave an empty COMPOSE_PROJECT_NAME=.\n\n\
 Environment:\n  \
   COMPOSE_DIR    Shop checkout (default: walk from cwd for .env / .env.example + deploy/)\n\n\
 Examples:\n  \
   fyrst-cli shopware env init --shop-id acme\n  \
-  fyrst-cli shopware env init --shop-id acme --env live --vps --image ghcr.io/example/acme\n  \
-  fyrst-cli shopware env init --shop-id acme --vps --dry-run\n"
+  fyrst-cli shopware env init --shop-id acme --env live --image ghcr.io/example/acme\n  \
+  fyrst-cli shopware env init --shop-id acme --dry-run\n"
 )]
 pub struct InitEnvArgs {
     /// Shop slug (required unless SHOPWARE_SHOP_ID is already non-empty in `.env`)
@@ -202,10 +205,6 @@ pub struct InitEnvArgs {
     /// Set IMAGE (registry/repo). Unset leaves IMAGE as-is
     #[arg(long = "image", value_name = "REPO")]
     pub image: Option<String>,
-
-    /// Comment out COMPOSE_PROJECT_NAME=… lines (create footgun on a VPS)
-    #[arg(long)]
-    pub vps: bool,
 
     /// Print the summary; do not write .env
     #[arg(long)]
@@ -510,7 +509,6 @@ mod tests {
             "staging",
             "--image",
             "ghcr.io/example/acme",
-            "--vps",
             "--dry-run",
         ])
         .unwrap();
@@ -521,11 +519,29 @@ mod tests {
                 assert_eq!(op.shop_id.as_deref(), Some("acme"));
                 assert_eq!(op.env, Some(DeployEnv::Staging));
                 assert_eq!(op.image.as_deref(), Some("ghcr.io/example/acme"));
-                assert!(op.vps);
                 assert!(op.dry_run);
             }
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn env_init_rejects_vps() {
+        let err = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "env",
+            "init",
+            "--shop-id",
+            "acme",
+            "--vps",
+        ])
+        .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("unexpected argument") || text.contains("unexpected"),
+            "{text}"
+        );
     }
 
     #[test]

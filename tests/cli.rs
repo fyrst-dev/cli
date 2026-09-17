@@ -81,6 +81,7 @@ fn shopware_help_prints_command_tree() {
         "backup restore",
         "sync sync",
         "backup backup",
+        "--vps",
     ] {
         assert!(
             !help.contains(gone),
