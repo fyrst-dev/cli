@@ -155,14 +155,22 @@ Shop-root `.env` is git-committed and shared. This command does not
 overwrite the whole file, invent MYSQL passwords or `APP_URL`, or generate
 `APP_SECRET` (`shopware-cli project create` already writes it). `--shop-id`
 is required unless `SHOPWARE_SHOP_ID` is already set. `--env` writes
-`SHOPWARE_DEPLOY_ENV` to **`.env.local`** (gitignored; created if missing;
-default `live` when unset and no host value). Uncommented
-`COMPOSE_PROJECT_NAME` (create writes `sw-…`) and leftover
-`SHOPWARE_DEPLOY_ENV` in shared `.env` are **commented out**. Compose
-project name is `<shop-id>-<env>` from identity, pinned with
-`docker compose -p` on VPS. `.env` may still be missing; missing keys are
-merged from `.env.example` (not `COMPOSE_PROJECT_NAME` /
-`SHOPWARE_DEPLOY_ENV`).
+`SHOPWARE_DEPLOY_ENV` and `COMPOSE_PROJECT_NAME=<shop-id>-<env>` to
+**`.env.local`** (gitignored; created if missing; default `live` when unset
+and no host value). Uncommented `COMPOSE_PROJECT_NAME` (create writes
+`sw-…`) and leftover `SHOPWARE_DEPLOY_ENV` in shared `.env` are
+**commented out** — those keys stay out of the committed file.
+
+Local Compose uses the same project name as VPS (`<shop-id>-<env>`, not the
+folder basename). Compose and `shopware-cli project dev` only auto-read
+`COMPOSE_PROJECT_NAME` from project-directory `.env`, so env init also
+upserts top-level `name: <shop-id>-<env>` in gitignored
+`compose.override.yaml` (create if missing; replace only that key).
+shopware-cli regenerates `compose.yaml` and leaves `compose.override.yaml`
+for local customization — gitignore it so the env-specific `name:` is not
+committed. VPS still pins `docker compose -p <shop-id>-<env>` from identity.
+`.env` may still be missing; missing keys are merged from `.env.example`
+(not `COMPOSE_PROJECT_NAME` / `SHOPWARE_DEPLOY_ENV`).
 
 ```bash
 fyrst-cli shopware env init --shop-id acme --dry-run

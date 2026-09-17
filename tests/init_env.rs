@@ -113,6 +113,7 @@ fn init_env_help_lists_flags() {
         "COMPOSE_PROJECT_NAME",
         ".env.local",
         "SHOPWARE_DEPLOY_ENV",
+        "compose.override.yaml",
     ] {
         assert!(help.contains(needle), "missing {needle} in:\n{help}");
     }
@@ -123,6 +124,10 @@ fn init_env_help_lists_flags() {
     assert!(
         help.contains("comments out") || help.contains("commented"),
         "env init --help should describe commenting COMPOSE_PROJECT_NAME:\n{help}"
+    );
+    assert!(
+        help.contains(".env.local") && help.contains("compose.override.yaml"),
+        "env init --help should describe host .env.local + compose.override.yaml:\n{help}"
     );
     assert!(
         !help.contains("--vps"),
@@ -183,13 +188,21 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
         log.contains("set SHOPWARE_DEPLOY_ENV=live in .env.local"),
         "{log}"
     );
+    assert!(
+        log.contains("set COMPOSE_PROJECT_NAME=acme-live in .env.local"),
+        "{log}"
+    );
+    assert!(
+        log.contains("set name: acme-live in compose.override.yaml"),
+        "{log}"
+    );
+    assert!(log.contains("create compose.override.yaml"), "{log}");
     assert!(log.contains("set IMAGE=ghcr.io/example/acme"), "{log}");
     assert!(
         log.contains("commented ") && log.contains("COMPOSE_PROJECT_NAME"),
         "{log}"
     );
     assert!(log.contains("create .env.local"), "{log}");
-    assert!(!log.contains("set COMPOSE_PROJECT_NAME="), "{log}");
     assert!(!log.contains("--vps"), "{log}");
     assert!(!log.contains("generate-app-secret"), "{log}");
     assert!(!log.contains("set APP_SECRET"), "{log}");
@@ -202,6 +215,7 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
     let after = fs::read_to_string(shop.path().join(".env")).unwrap();
     assert_eq!(after, original, "dry-run wrote .env");
     assert!(!shop.path().join(".env.local").is_file());
+    assert!(!shop.path().join("compose.override.yaml").is_file());
 }
 
 #[test]
@@ -254,10 +268,17 @@ SHOPWARE_DEPLOY_ENV=from-example
         "{log}"
     );
     assert!(
+        log.contains("set COMPOSE_PROJECT_NAME=acme-staging in .env.local"),
+        "{log}"
+    );
+    assert!(
+        log.contains("set name: acme-staging in compose.override.yaml"),
+        "{log}"
+    );
+    assert!(
         log.contains("commented ") && log.contains("COMPOSE_PROJECT_NAME"),
         "{log}"
     );
-    assert!(!log.contains("set COMPOSE_PROJECT_NAME="), "{log}");
     assert!(!log.contains("--vps"), "{log}");
     assert_no_secrets(&out, &["from-example"]);
 
@@ -278,6 +299,9 @@ SHOPWARE_DEPLOY_ENV=from-example
     assert!(!env.contains("--vps"));
     let local = fs::read_to_string(shop.path().join(".env.local")).unwrap();
     assert!(local.contains("SHOPWARE_DEPLOY_ENV=staging"));
+    assert!(local.contains("COMPOSE_PROJECT_NAME=acme-staging"));
+    let override_yaml = fs::read_to_string(shop.path().join("compose.override.yaml")).unwrap();
+    assert!(override_yaml.contains("name: acme-staging\n"));
     let mode = fs::metadata(shop.path().join(".env"))
         .unwrap()
         .permissions()
@@ -381,7 +405,16 @@ SHOPWARE_SHOP_ID=acme
 ",
     )
     .unwrap();
-    fs::write(shop.path().join(".env.local"), "SHOPWARE_DEPLOY_ENV=live\n").unwrap();
+    fs::write(
+        shop.path().join(".env.local"),
+        "SHOPWARE_DEPLOY_ENV=live\nCOMPOSE_PROJECT_NAME=acme-live\n",
+    )
+    .unwrap();
+    fs::write(
+        shop.path().join("compose.override.yaml"),
+        "name: acme-live\n",
+    )
+    .unwrap();
     let out = init_env(shop.path(), &[]);
     assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
     let log = stdout(&out);
@@ -393,7 +426,14 @@ SHOPWARE_SHOP_ID=acme
         log.contains("already set SHOPWARE_DEPLOY_ENV=live in .env.local"),
         "{log}"
     );
-    assert!(!log.contains("set COMPOSE_PROJECT_NAME="), "{log}");
+    assert!(
+        log.contains("already set COMPOSE_PROJECT_NAME=acme-live in .env.local"),
+        "{log}"
+    );
+    assert!(
+        log.contains("already set name: acme-live in compose.override.yaml"),
+        "{log}"
+    );
     assert!(!log.contains("--vps"), "{log}");
     assert!(log.contains("no changes (already up to date)"), "{log}");
     let env = fs::read_to_string(shop.path().join(".env")).unwrap();
@@ -421,7 +461,10 @@ COMPOSE_PROJECT_NAME=shopware-acme
         log.contains("commented ") && log.contains("COMPOSE_PROJECT_NAME"),
         "{log}"
     );
-    assert!(!log.contains("set COMPOSE_PROJECT_NAME="), "{log}");
+    assert!(
+        log.contains("set COMPOSE_PROJECT_NAME=acme-live in .env.local"),
+        "{log}"
+    );
     assert!(!log.contains("no changes (already up to date)"), "{log}");
     let env = fs::read_to_string(shop.path().join(".env")).unwrap();
     assert!(env.contains("# COMPOSE_PROJECT_NAME=shopware-acme"));
@@ -430,6 +473,53 @@ COMPOSE_PROJECT_NAME=shopware-acme
         .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
     let local = fs::read_to_string(shop.path().join(".env.local")).unwrap();
     assert!(local.contains("SHOPWARE_DEPLOY_ENV=live"));
+    assert!(local.contains("COMPOSE_PROJECT_NAME=acme-live"));
+    let override_yaml = fs::read_to_string(shop.path().join("compose.override.yaml")).unwrap();
+    assert!(override_yaml.contains("name: acme-live\n"));
+}
+
+#[test]
+fn existing_override_keeps_services_when_name_is_set() {
+    let shop = TempShop::new("keep-ov");
+    fs::write(shop.path().join(".env"), "SHOPWARE_SHOP_ID=acme\n").unwrap();
+    fs::write(
+        shop.path().join("compose.override.yaml"),
+        "\
+# xdebug
+services:
+  web:
+    name: nested-must-stay
+    ports:
+      - \"9003:9003\"
+",
+    )
+    .unwrap();
+    let out = init_env(shop.path(), &["--env", "dev"]);
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let log = stdout(&out);
+    assert!(
+        log.contains("set COMPOSE_PROJECT_NAME=acme-dev in .env.local"),
+        "{log}"
+    );
+    assert!(
+        log.contains("set name: acme-dev in compose.override.yaml"),
+        "{log}"
+    );
+    let env = fs::read_to_string(shop.path().join(".env")).unwrap();
+    assert!(!env
+        .lines()
+        .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
+    assert!(!env
+        .lines()
+        .any(|l| l.trim_start().starts_with("SHOPWARE_DEPLOY_ENV=")));
+    let local = fs::read_to_string(shop.path().join(".env.local")).unwrap();
+    assert!(local.contains("COMPOSE_PROJECT_NAME=acme-dev"));
+    assert!(local.contains("SHOPWARE_DEPLOY_ENV=dev"));
+    let ov = fs::read_to_string(shop.path().join("compose.override.yaml")).unwrap();
+    assert!(ov.contains("name: acme-dev\n"));
+    assert!(ov.contains("    name: nested-must-stay"));
+    assert!(ov.contains("# xdebug"));
+    assert!(ov.contains("      - \"9003:9003\""));
 }
 
 #[test]
@@ -464,6 +554,7 @@ MYSQL_PASSWORD={MYSQL_PASS}
     assert_no_secrets(&out, &[]);
     assert!(!shop.path().join(".env").is_file());
     assert!(!shop.path().join(".env.local").is_file());
+    assert!(!shop.path().join("compose.override.yaml").is_file());
 }
 
 #[test]

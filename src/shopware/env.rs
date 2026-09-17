@@ -3,10 +3,10 @@
 //! One loader for every shopware verb: process env is the base, then
 //! `.env`, `.env.local` (if present), `.env.prod` (if present). Later files
 //! win except identity / process-win keys, which a non-empty process value
-//! still owns. Empty `SHOPWARE_DEPLOY_ENV=` in a file is ignored so a host
-//! file (`.env.local` / `.env.prod`) can own the value over an empty leftover
-//! in committed `.env`. Leftover `SYNC_*` / `BACKUP_SSH_*` / `BACKUP_ALLOW_*`
-//! names fail when the replacement is unset.
+//! still owns. Empty `SHOPWARE_DEPLOY_ENV=` / `COMPOSE_PROJECT_NAME=` in a file
+//! is ignored so a host file (`.env.local` / `.env.prod`) can own the value
+//! over an empty leftover in committed `.env`. Leftover `SYNC_*` /
+//! `BACKUP_SSH_*` / `BACKUP_ALLOW_*` names fail when the replacement is unset.
 
 use super::envfile::parse_env_file;
 use super::error::Error;
@@ -91,7 +91,9 @@ impl ShopEnv {
                 let contents = fs::read_to_string(&path)
                     .map_err(|e| Error::fail(format!("cannot read {}: {e}", path.display())))?;
                 for (k, v) in parse_env_file(&contents) {
-                    if k == "SHOPWARE_DEPLOY_ENV" && v.is_empty() {
+                    if matches!(k.as_str(), "SHOPWARE_DEPLOY_ENV" | "COMPOSE_PROJECT_NAME")
+                        && v.is_empty()
+                    {
                         // Empty leftover in shared `.env` must not hide a host file.
                         continue;
                     }
@@ -318,8 +320,9 @@ pub fn allow_live_restore(env: &ShopEnv) -> bool {
 
 /// Compose project `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}`.
 ///
-/// Derived at runtime from loaded identity. Do not store this (or
-/// `COMPOSE_PROJECT_NAME`) in committed `.env`; VPS compose pins `-p`.
+/// Same string locally (`.env.local` + `compose.override.yaml` `name:`) and
+/// on VPS (`docker compose -p`). Do not store this (or `COMPOSE_PROJECT_NAME`)
+/// in committed `.env`.
 pub fn vps_project_name(shop_id: &str, deploy_env: &str) -> String {
     format!("{shop_id}-{deploy_env}")
 }
@@ -795,6 +798,43 @@ COMPOSE_PROFILES=redis
         fs::write(shop.join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
         let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
         assert_eq!(env.get("SHOPWARE_DEPLOY_ENV"), Some("dev"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn empty_shared_compose_project_name_does_not_hide_host_file() {
+        let shop = temp_shop("cpn-empty-shared");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nCOMPOSE_PROJECT_NAME=\n",
+        )
+        .unwrap();
+        fs::write(
+            shop.join(".env.local"),
+            "SHOPWARE_DEPLOY_ENV=dev\nCOMPOSE_PROJECT_NAME=acme-dev\n",
+        )
+        .unwrap();
+        let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
+        assert_eq!(env.get("COMPOSE_PROJECT_NAME"), Some("acme-dev"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn compose_project_name_from_local_wins_over_shared_leftover() {
+        let shop = temp_shop("cpn-local-wins");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nCOMPOSE_PROJECT_NAME=sw-shop-acme\n",
+        )
+        .unwrap();
+        fs::write(
+            shop.join(".env.local"),
+            "SHOPWARE_DEPLOY_ENV=dev\nCOMPOSE_PROJECT_NAME=acme-dev\n",
+        )
+        .unwrap();
+        let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
+        assert_eq!(env.get("COMPOSE_PROJECT_NAME"), Some("acme-dev"));
+        assert_eq!(vps_project_name_opt(&env).as_deref(), Some("acme-dev"));
         let _ = fs::remove_dir_all(&shop);
     }
 

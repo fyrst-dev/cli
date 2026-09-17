@@ -2,7 +2,8 @@
 //!
 //! Database dumps are owned by `shopware-cli project dump`. This binary does
 //! not wrap dump. `shopware env init` finishes committed `.env` (shop id / IMAGE)
-//! and host `.env.local` (`SHOPWARE_DEPLOY_ENV`). Database
+//! and host `.env.local` (`SHOPWARE_DEPLOY_ENV`, `COMPOSE_PROJECT_NAME`) plus
+//! gitignored `compose.override.yaml` (`name: <shop-id>-<env>`). Database
 //! import is `fyrst-cli shopware db import` (MySQL client via Compose exec or
 //! a one-shot client image). VPS release is `fyrst-cli shopware deploy release`.
 //! Rollback is `fyrst-cli shopware deploy rollback` (IMAGE_TAG from

@@ -4,14 +4,19 @@
 //! This command may set `SHOPWARE_SHOP_ID` (same slug everywhere) and optional
 //! `IMAGE`, merge missing keys from `.env.example`, and **comments out**
 //! uncommented `COMPOSE_PROJECT_NAME` (create writes `sw-…`) and leftover
-//! `SHOPWARE_DEPLOY_ENV` in shared `.env`. Deploy env is written to
-//! `.env.local` (gitignored). VPS Compose project is
+//! `SHOPWARE_DEPLOY_ENV` in shared `.env`. Deploy env and
+//! `COMPOSE_PROJECT_NAME=<shop-id>-<env>` are written to `.env.local`
+//! (gitignored). Top-level Compose `name: <shop-id>-<env>` is upserted in
+//! gitignored `compose.override.yaml` so `shopware-cli project dev` uses that
+//! name (Compose auto-reads `COMPOSE_PROJECT_NAME` only from project-directory
+//! `.env`, not `.env.local`). VPS Compose project is the same
 //! `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` via identity + `docker compose -p`.
 //! Does not invent MYSQL passwords or `APP_URL`, and does not generate or
 //! rewrite `APP_SECRET` (`shopware-cli project create` writes that). Never
 //! prints secrets. This is not a dump command.
 
-use super::env::resolve_compose_dir_init;
+use super::compose_override::{upsert_top_level_name, OVERRIDE_REL};
+use super::env::{resolve_compose_dir_init, vps_project_name};
 use super::envfile::{
     comment_compose_project_name, comment_deploy_env, last_value, merge_missing_from_example,
     set_key,
@@ -27,8 +32,10 @@ pub(crate) struct Plan {
     pub compose_dir: PathBuf,
     pub env_file: PathBuf,
     pub local_env_file: PathBuf,
+    pub override_file: PathBuf,
     contents: String,
     local_contents: String,
+    override_contents: String,
     pub dry_run: bool,
     pub copied: bool,
     pub merged_keys: Vec<String>,
@@ -37,6 +44,10 @@ pub(crate) struct Plan {
     pub deploy_env: String,
     pub deploy_env_changed: bool,
     pub local_created: bool,
+    pub compose_project_name: String,
+    pub compose_project_name_changed: bool,
+    pub override_created: bool,
+    pub override_changed: bool,
     pub image_set: Option<String>,
     pub compose_project_name_commented: usize,
     pub deploy_env_commented: usize,
@@ -48,6 +59,7 @@ impl std::fmt::Debug for Plan {
             .field("compose_dir", &self.compose_dir)
             .field("env_file", &self.env_file)
             .field("local_env_file", &self.local_env_file)
+            .field("override_file", &self.override_file)
             .field("dry_run", &self.dry_run)
             .field("copied", &self.copied)
             .field("merged_keys", &self.merged_keys)
@@ -56,6 +68,13 @@ impl std::fmt::Debug for Plan {
             .field("deploy_env", &self.deploy_env)
             .field("deploy_env_changed", &self.deploy_env_changed)
             .field("local_created", &self.local_created)
+            .field("compose_project_name", &self.compose_project_name)
+            .field(
+                "compose_project_name_changed",
+                &self.compose_project_name_changed,
+            )
+            .field("override_created", &self.override_created)
+            .field("override_changed", &self.override_changed)
             .field("image_set", &self.image_set)
             .field(
                 "compose_project_name_commented",
@@ -75,6 +94,11 @@ impl Plan {
     #[cfg(test)]
     pub(crate) fn local_contents(&self) -> &str {
         &self.local_contents
+    }
+
+    #[cfg(test)]
+    pub(crate) fn override_contents(&self) -> &str {
+        &self.override_contents
     }
 }
 
@@ -110,6 +134,7 @@ pub(crate) fn plan(
     let compose_dir = resolve_compose_dir_init(process_env, cwd)?;
     let env_file = compose_dir.join(".env");
     let local_env_file = compose_dir.join(".env.local");
+    let override_file = compose_dir.join(OVERRIDE_REL);
     let example_file = compose_dir.join(".env.example");
 
     let env_exists = env_file.is_file();
@@ -151,7 +176,14 @@ pub(crate) fn plan(
     let existing_shop_id = last_value(&contents, "SHOPWARE_SHOP_ID");
     let leftover_shared_deploy_env = last_value(&contents, "SHOPWARE_DEPLOY_ENV");
     let existing_host_deploy_env = last_value(&local_contents, "SHOPWARE_DEPLOY_ENV");
+    let existing_host_compose_project_name = last_value(&local_contents, "COMPOSE_PROJECT_NAME");
     let existing_image = last_value(&contents, "IMAGE");
+    let override_exists = override_file.is_file();
+    let existing_override = if override_exists {
+        read_file(&override_file)?
+    } else {
+        String::new()
+    };
 
     let shop_id_flag = nonempty_flag(args.shop_id.as_deref(), "--shop-id")?;
     let shop_id = match shop_id_flag {
@@ -195,16 +227,27 @@ pub(crate) fn plan(
     let (contents, compose_project_name_commented) = comment_compose_project_name(&contents);
     let (contents, deploy_env_commented) = comment_deploy_env(&contents);
 
+    let compose_project_name = vps_project_name(&shop_id, &deploy_env);
     local_contents = set_key(&local_contents, "SHOPWARE_DEPLOY_ENV", &deploy_env);
+    local_contents = set_key(
+        &local_contents,
+        "COMPOSE_PROJECT_NAME",
+        &compose_project_name,
+    );
+    let (override_contents, override_changed) =
+        upsert_top_level_name(&existing_override, &compose_project_name);
 
     let shop_id_changed = existing_shop_id != shop_id;
     let deploy_env_changed = existing_host_deploy_env != deploy_env;
+    let compose_project_name_changed = existing_host_compose_project_name != compose_project_name;
     Ok(Plan {
         compose_dir,
         env_file,
         local_env_file,
+        override_file,
         contents,
         local_contents,
+        override_contents,
         dry_run: args.dry_run,
         copied,
         merged_keys,
@@ -213,6 +256,10 @@ pub(crate) fn plan(
         deploy_env,
         deploy_env_changed,
         local_created: !local_exists,
+        compose_project_name,
+        compose_project_name_changed,
+        override_created: !override_exists,
+        override_changed,
         image_set,
         compose_project_name_commented,
         deploy_env_commented,
@@ -282,6 +329,12 @@ fn execute(plan: &Plan) -> Result<(), Error> {
             ))
         })?;
         chmod_600(&plan.local_env_file)?;
+        fs::write(&plan.override_file, &plan.override_contents).map_err(|e| {
+            Error::fail(format!(
+                "cannot write {}: {e}",
+                plan.override_file.display()
+            ))
+        })?;
     }
     print!("{}", summary_text(plan));
     Ok(())
@@ -298,6 +351,7 @@ pub(crate) fn summary_text(plan: &Plan) -> String {
     } else {
         let _ = writeln!(s, "==> Updated {}", plan.env_file.display());
         let _ = writeln!(s, "==> Updated {}", plan.local_env_file.display());
+        let _ = writeln!(s, "==> Updated {}", plan.override_file.display());
     }
 
     let mut changes = 0u32;
@@ -359,6 +413,38 @@ pub(crate) fn summary_text(plan: &Plan) -> String {
             plan.deploy_env
         );
     }
+    if plan.compose_project_name_changed {
+        let _ = writeln!(
+            s,
+            "  set COMPOSE_PROJECT_NAME={} in .env.local",
+            plan.compose_project_name
+        );
+        changes += 1;
+    } else {
+        let _ = writeln!(
+            s,
+            "  already set COMPOSE_PROJECT_NAME={} in .env.local",
+            plan.compose_project_name
+        );
+    }
+    if plan.override_created {
+        let _ = writeln!(s, "  create {OVERRIDE_REL}");
+        changes += 1;
+    }
+    if plan.override_changed {
+        let _ = writeln!(
+            s,
+            "  set name: {} in {OVERRIDE_REL}",
+            plan.compose_project_name
+        );
+        changes += 1;
+    } else {
+        let _ = writeln!(
+            s,
+            "  already set name: {} in {OVERRIDE_REL}",
+            plan.compose_project_name
+        );
+    }
     if changes == 0 {
         let _ = writeln!(s, "  no changes (already up to date)");
     }
@@ -390,6 +476,8 @@ mod tests {
     use super::super::envfile::{has_key, MERGE_FROM_EXAMPLE_HEADER};
     use super::*;
     use crate::cli::DeployEnv;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempShop(PathBuf);
@@ -418,6 +506,10 @@ mod tests {
 
         fn write_local(&self, s: &str) {
             fs::write(self.0.join(".env.local"), s).unwrap();
+        }
+
+        fn write_override(&self, s: &str) {
+            fs::write(self.0.join(OVERRIDE_REL), s).unwrap();
         }
 
         fn write_example(&self, s: &str) {
@@ -485,17 +577,27 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
             last_value(p.local_contents(), "SHOPWARE_DEPLOY_ENV"),
             "live"
         );
+        assert_eq!(
+            last_value(p.local_contents(), "COMPOSE_PROJECT_NAME"),
+            "acme-live"
+        );
+        assert_eq!(p.compose_project_name, "acme-live");
+        assert!(p.override_created);
+        assert!(p.override_changed);
+        assert!(p.override_contents().contains("name: acme-live\n"));
         assert!(!p.contents().contains("COMPOSE_PROJECT_NAME=shopware-"));
         assert!(!p.contents().contains("COMPOSE_PROJECT_NAME=acme-"));
         let text = summary_text(&p);
         assert!(text.contains("DRY-RUN (no write)"));
         assert!(text.contains("set SHOPWARE_SHOP_ID=acme"));
         assert!(text.contains("set SHOPWARE_DEPLOY_ENV=live in .env.local"));
+        assert!(text.contains("set COMPOSE_PROJECT_NAME=acme-live in .env.local"));
+        assert!(text.contains("create compose.override.yaml"));
+        assert!(text.contains("set name: acme-live in compose.override.yaml"));
         assert!(text.contains("commented "));
         assert!(text.contains("COMPOSE_PROJECT_NAME"));
         assert!(text.contains("create .env.local"));
         assert!(text.contains("set IMAGE=ghcr.io/example/acme"));
-        assert!(!text.contains("set COMPOSE_PROJECT_NAME="));
         assert!(!text.contains("--vps"));
         assert!(text.contains("APP_SECRET"));
         assert!(!text.contains("generate-app-secret"));
@@ -507,6 +609,7 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
             "dry-run must not write .env"
         );
         assert!(!shop.path().join(".env.local").is_file());
+        assert!(!shop.path().join(OVERRIDE_REL).is_file());
     }
 
     #[test]
@@ -552,15 +655,22 @@ SHOPWARE_DEPLOY_ENV=from-example
             last_value(p.local_contents(), "SHOPWARE_DEPLOY_ENV"),
             "staging"
         );
+        assert_eq!(
+            last_value(p.local_contents(), "COMPOSE_PROJECT_NAME"),
+            "acme-staging"
+        );
+        assert!(p.override_contents().contains("name: acme-staging\n"));
         assert!(!p.contents().contains("COMPOSE_PROJECT_NAME=shopware-"));
+        assert!(!p.contents().contains("COMPOSE_PROJECT_NAME=acme-"));
         assert!(!p.contents().contains("--vps"));
         let text = summary_text(&p);
         assert!(!text.contains(MYSQL_PASS));
         assert!(!text.contains("--vps"));
         assert!(text.contains("merge missing keys from .env.example: NEW_FROM_EXAMPLE"));
         assert!(text.contains("set SHOPWARE_DEPLOY_ENV=staging in .env.local"));
+        assert!(text.contains("set COMPOSE_PROJECT_NAME=acme-staging in .env.local"));
+        assert!(text.contains("set name: acme-staging in compose.override.yaml"));
         assert!(text.contains("commented "));
-        assert!(!text.contains("set COMPOSE_PROJECT_NAME="));
     }
 
     #[test]
@@ -572,12 +682,16 @@ SHOPWARE_SHOP_ID=acme
 # COMPOSE_PROJECT_NAME=sw-shop-acme
 ",
         );
-        shop.write_local("SHOPWARE_DEPLOY_ENV=live\n");
+        shop.write_local("SHOPWARE_DEPLOY_ENV=live\nCOMPOSE_PROJECT_NAME=acme-live\n");
+        shop.write_override("name: acme-live\n");
         let mut a = args();
         a.shop_id = None;
         let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert_eq!(p.compose_project_name_commented, 0);
         assert!(!p.deploy_env_changed);
+        assert!(!p.compose_project_name_changed);
+        assert!(!p.override_changed);
+        assert!(!p.override_created);
         assert!(!p.local_created);
         assert!(p.contents().contains("# COMPOSE_PROJECT_NAME=sw-shop-acme"));
         assert_no_uncommented(p.contents(), "COMPOSE_PROJECT_NAME");
@@ -585,10 +699,15 @@ SHOPWARE_SHOP_ID=acme
             last_value(p.local_contents(), "SHOPWARE_DEPLOY_ENV"),
             "live"
         );
+        assert_eq!(
+            last_value(p.local_contents(), "COMPOSE_PROJECT_NAME"),
+            "acme-live"
+        );
         let text = summary_text(&p);
         assert!(text.contains("no uncommented COMPOSE_PROJECT_NAME=… in shared .env"));
         assert!(text.contains("already set SHOPWARE_DEPLOY_ENV=live in .env.local"));
-        assert!(!text.contains("set COMPOSE_PROJECT_NAME="));
+        assert!(text.contains("already set COMPOSE_PROJECT_NAME=acme-live in .env.local"));
+        assert!(text.contains("already set name: acme-live in compose.override.yaml"));
         assert!(!text.contains("--vps"));
         assert!(text.contains("no changes (already up to date)"));
     }
@@ -614,11 +733,16 @@ MYSQL_PASSWORD=example-secret
             last_value(p.local_contents(), "SHOPWARE_DEPLOY_ENV"),
             "live"
         );
+        assert_eq!(
+            last_value(p.local_contents(), "COMPOSE_PROJECT_NAME"),
+            "acme-live"
+        );
+        assert!(p.override_contents().contains("name: acme-live\n"));
         let text = summary_text(&p);
         assert!(text.contains("copy .env.example → .env"));
         assert!(text.contains("commented "));
         assert!(text.contains("create .env.local"));
-        assert!(!text.contains("set COMPOSE_PROJECT_NAME="));
+        assert!(text.contains("set COMPOSE_PROJECT_NAME=acme-live in .env.local"));
         assert!(!text.contains("--vps"));
         assert!(!text.contains("example-secret"));
     }
@@ -647,8 +771,13 @@ SHOPWARE_DEPLOY_ENV=staging
             last_value(p.local_contents(), "SHOPWARE_DEPLOY_ENV"),
             "staging"
         );
+        assert_eq!(
+            last_value(p.local_contents(), "COMPOSE_PROJECT_NAME"),
+            "acme-staging"
+        );
         let text = summary_text(&p);
         assert!(text.contains("set SHOPWARE_DEPLOY_ENV=staging in .env.local"));
+        assert!(text.contains("set COMPOSE_PROJECT_NAME=acme-staging in .env.local"));
         assert!(text.contains("commented "));
         assert!(text.contains("SHOPWARE_DEPLOY_ENV"));
     }
@@ -765,10 +894,14 @@ MYSQL_PASSWORD=example-secret
             last_value(p.local_contents(), "SHOPWARE_DEPLOY_ENV"),
             "live"
         );
+        assert_eq!(
+            last_value(p.local_contents(), "COMPOSE_PROJECT_NAME"),
+            "acme-live"
+        );
         let text = summary_text(&p);
         assert!(text.contains("copy .env.example → .env"));
         assert!(text.contains("create .env.local"));
-        assert!(!text.contains("set COMPOSE_PROJECT_NAME="));
+        assert!(text.contains("set COMPOSE_PROJECT_NAME=acme-live in .env.local"));
         assert!(!text.contains("example-secret"));
         assert!(!shop.path().join(".env").is_file());
     }
@@ -781,15 +914,19 @@ MYSQL_PASSWORD=example-secret
 SHOPWARE_SHOP_ID=acme
 ",
         );
-        shop.write_local("SHOPWARE_DEPLOY_ENV=playground\n");
+        shop.write_local("SHOPWARE_DEPLOY_ENV=playground\nCOMPOSE_PROJECT_NAME=acme-playground\n");
+        shop.write_override("name: acme-playground\n");
         let mut a = args();
         a.shop_id = None;
         let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert_eq!(p.deploy_env, "playground");
         assert!(!p.deploy_env_changed);
+        assert!(!p.compose_project_name_changed);
+        assert!(!p.override_changed);
         assert!(!p.local_created);
         let text = summary_text(&p);
         assert!(text.contains("already set SHOPWARE_DEPLOY_ENV=playground in .env.local"));
+        assert!(text.contains("already set COMPOSE_PROJECT_NAME=acme-playground in .env.local"));
         assert!(!text.contains("--vps"));
         assert!(text.contains("no changes (already up to date)"));
     }
@@ -798,16 +935,80 @@ SHOPWARE_SHOP_ID=acme
     fn env_flag_overwrites_host_file() {
         let shop = TempShop::new("flag-wins");
         shop.write_env("SHOPWARE_SHOP_ID=acme\n");
-        shop.write_local("SHOPWARE_DEPLOY_ENV=live\n");
+        shop.write_local("SHOPWARE_DEPLOY_ENV=live\nCOMPOSE_PROJECT_NAME=acme-live\n");
+        shop.write_override("name: acme-live\nservices:\n  web:\n    image: x\n");
         let mut a = args();
         a.shop_id = None;
         a.env = Some(DeployEnv::Dev);
         let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert_eq!(p.deploy_env, "dev");
         assert!(p.deploy_env_changed);
+        assert!(p.compose_project_name_changed);
         assert_eq!(last_value(p.local_contents(), "SHOPWARE_DEPLOY_ENV"), "dev");
+        assert_eq!(
+            last_value(p.local_contents(), "COMPOSE_PROJECT_NAME"),
+            "acme-dev"
+        );
+        assert!(p.override_contents().contains("name: acme-dev\n"));
+        assert!(p.override_contents().contains("    image: x"));
+        assert!(!p.override_contents().contains("name: acme-live"));
         let text = summary_text(&p);
         assert!(text.contains("set SHOPWARE_DEPLOY_ENV=dev in .env.local"));
+        assert!(text.contains("set COMPOSE_PROJECT_NAME=acme-dev in .env.local"));
+        assert!(text.contains("set name: acme-dev in compose.override.yaml"));
+    }
+
+    #[test]
+    fn execute_writes_local_project_name_and_keeps_override_services() {
+        let shop = TempShop::new("exec-override");
+        shop.write_env(
+            "\
+SHOPWARE_SHOP_ID=acme
+COMPOSE_PROJECT_NAME=sw-shop-acme
+",
+        );
+        shop.write_override(
+            "\
+# keep me
+services:
+  web:
+    name: nested-must-stay
+    ports:
+      - \"9003:9003\"
+",
+        );
+        let mut a = args();
+        a.dry_run = false;
+        a.env = Some(DeployEnv::Dev);
+        let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
+        execute(&p).unwrap();
+
+        let env = fs::read_to_string(shop.path().join(".env")).unwrap();
+        assert_no_uncommented(&env, "COMPOSE_PROJECT_NAME");
+        assert!(!env
+            .lines()
+            .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
+        let local = fs::read_to_string(shop.path().join(".env.local")).unwrap();
+        assert_eq!(last_value(&local, "SHOPWARE_DEPLOY_ENV"), "dev");
+        assert_eq!(last_value(&local, "COMPOSE_PROJECT_NAME"), "acme-dev");
+        let ov = fs::read_to_string(shop.path().join(OVERRIDE_REL)).unwrap();
+        assert!(ov.contains("name: acme-dev\n"));
+        assert!(ov.contains("    name: nested-must-stay"));
+        assert!(ov.contains("# keep me"));
+        assert!(ov.contains("      - \"9003:9003\""));
+        #[cfg(unix)]
+        {
+            let local_mode = fs::metadata(shop.path().join(".env.local"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(local_mode, 0o600);
+        }
+        assert!(!fs::read_to_string(shop.path().join(".env"))
+            .unwrap()
+            .lines()
+            .any(|l| l.trim_start().starts_with("SHOPWARE_DEPLOY_ENV=")));
     }
 
     #[test]
