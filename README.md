@@ -152,14 +152,15 @@ Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, optional
 ### env init
 
 Does not overwrite the whole `.env`. Does not invent MYSQL passwords or
-`APP_URL`. `--shop-id` is required unless `SHOPWARE_SHOP_ID` is already set.
-`--env` defaults to `live`. `--vps` comments out `COMPOSE_PROJECT_NAME`.
-`.env` may still be missing; missing keys are merged from `.env.example`.
+`APP_URL`. Does not generate `APP_SECRET` (`shopware-cli project create`
+already writes it). `--shop-id` is required unless `SHOPWARE_SHOP_ID` is
+already set. `--env` defaults to `live`. `--vps` comments out
+`COMPOSE_PROJECT_NAME`. `.env` may still be missing; missing keys are
+merged from `.env.example`.
 
 ```bash
 fyrst-cli shopware env init --shop-id acme --vps --dry-run
 fyrst-cli shopware env init --shop-id acme --env live --vps --image ghcr.io/example/acme
-fyrst-cli shopware env init --shop-id acme --generate-app-secret
 ```
 
 ### db import

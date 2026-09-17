@@ -109,12 +109,19 @@ fn init_env_help_lists_flags() {
         "--env",
         "--image",
         "--vps",
-        "--generate-app-secret",
         "--dry-run",
         "COMPOSE_DIR",
     ] {
         assert!(help.contains(needle), "missing {needle} in:\n{help}");
     }
+    assert!(
+        !help.contains("generate-app-secret"),
+        "env init --help must not list --generate-app-secret:\n{help}"
+    );
+    assert!(
+        help.contains("APP_SECRET"),
+        "env init --help should say APP_SECRET is not generated:\n{help}"
+    );
     assert!(
         !help.to_ascii_lowercase().contains("wrap dump"),
         "env init --help must not wrap dump:\n{help}"
@@ -129,7 +136,7 @@ fn dry_run_prints_plan_and_does_not_write() {
 SHOPWARE_SHOP_ID=
 SHOPWARE_DEPLOY_ENV=
 MYSQL_PASSWORD={MYSQL_PASS}
-APP_SECRET=
+APP_SECRET={EXISTING_SECRET}
 COMPOSE_PROJECT_NAME=sw-shop-acme
 "
     );
@@ -142,7 +149,6 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
             "--vps",
             "--image",
             "ghcr.io/example/acme",
-            "--generate-app-secret",
             "--dry-run",
         ],
     );
@@ -159,7 +165,8 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
     assert!(log.contains("set SHOPWARE_DEPLOY_ENV=live"), "{log}");
     assert!(log.contains("set IMAGE=ghcr.io/example/acme"), "{log}");
     assert!(log.contains("commented 1 COMPOSE_PROJECT_NAME"), "{log}");
-    assert!(log.contains("value not printed"), "{log}");
+    assert!(!log.contains("generate-app-secret"), "{log}");
+    assert!(!log.contains("set APP_SECRET"), "{log}");
     assert!(
         log.contains("left unchanged: MYSQL passwords, APP_URL"),
         "{log}"
@@ -239,8 +246,8 @@ NEW_FROM_EXAMPLE=1
 }
 
 #[test]
-fn skip_generate_when_secret_exists() {
-    let shop = TempShop::new("skip-sec");
+fn leaves_existing_app_secret_unchanged() {
+    let shop = TempShop::new("keep-sec");
     fs::write(
         shop.path().join(".env"),
         format!(
@@ -253,21 +260,19 @@ MYSQL_PASSWORD={MYSQL_PASS}
         ),
     )
     .unwrap();
-    let out = init_env(shop.path(), &["--generate-app-secret"]);
+    let out = init_env(shop.path(), &[]);
     assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
     let log = stdout(&out);
-    assert!(
-        log.contains("APP_SECRET already set; skipped --generate-app-secret"),
-        "{log}"
-    );
+    assert!(!log.contains("generate-app-secret"), "{log}");
+    assert!(!log.contains("set APP_SECRET"), "{log}");
     assert_no_secrets(&out, &[]);
     let env = fs::read_to_string(shop.path().join(".env")).unwrap();
     assert!(env.contains(&format!("APP_SECRET={EXISTING_SECRET}")));
 }
 
 #[test]
-fn generate_app_secret_writes_hex_and_never_prints_it() {
-    let shop = TempShop::new("gen");
+fn does_not_generate_empty_app_secret() {
+    let shop = TempShop::new("empty-sec");
     fs::write(
         shop.path().join(".env"),
         format!(
@@ -279,7 +284,7 @@ MYSQL_PASSWORD={MYSQL_PASS}
         ),
     )
     .unwrap();
-    let out = init_env(shop.path(), &["--generate-app-secret"]);
+    let out = init_env(shop.path(), &[]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -288,18 +293,31 @@ MYSQL_PASSWORD={MYSQL_PASS}
         stdout(&out)
     );
     let log = stdout(&out);
-    assert!(log.contains("value not printed"), "{log}");
+    assert!(!log.contains("generate-app-secret"), "{log}");
+    assert!(!log.contains("set APP_SECRET"), "{log}");
+    assert_no_secrets(&out, &[]);
     let env = fs::read_to_string(shop.path().join(".env")).unwrap();
     let secret = env
         .lines()
         .find_map(|l| l.strip_prefix("APP_SECRET="))
-        .unwrap_or("");
-    assert_eq!(secret.len(), 64, "expected 32-byte hex, got {secret:?}");
-    assert!(
-        secret.bytes().all(|c| c.is_ascii_hexdigit()),
-        "not hex: {secret}"
+        .unwrap_or("missing");
+    assert_eq!(
+        secret, "",
+        "env init must not write APP_SECRET, got {secret:?}"
     );
-    assert_no_secrets(&out, &[secret]);
+}
+
+#[test]
+fn generate_app_secret_flag_is_rejected() {
+    let shop = TempShop::new("gone-flag");
+    fs::write(shop.path().join(".env"), "SHOPWARE_SHOP_ID=acme\n").unwrap();
+    let out = init_env(shop.path(), &["--generate-app-secret"]);
+    assert_ne!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let text = combined(&out);
+    assert!(
+        text.contains("unexpected argument") || text.contains("unexpected"),
+        "{text}"
+    );
 }
 
 #[test]

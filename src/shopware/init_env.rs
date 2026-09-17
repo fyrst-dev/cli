@@ -1,7 +1,9 @@
 //! `fyrst-cli shopware env init` — finish shop-root `.env` after create + Flex.
 //!
-//! Behaviour matches fyrst-dev/recipes `deploy/init-env.sh`. Does not overwrite
-//! the whole file, does not invent MYSQL passwords or `APP_URL`, and never
+//! Sets fyrst identity (shop id, deploy env, optional IMAGE, `--vps`) and
+//! merges missing keys from `.env.example`. Does not overwrite the whole file,
+//! does not invent MYSQL passwords or `APP_URL`, and does not generate or
+//! rewrite `APP_SECRET` (`shopware-cli project create` writes that). Never
 //! prints secrets. This is not a dump command.
 
 use super::env::resolve_compose_dir_init;
@@ -14,14 +16,6 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SecretAction {
-    None,
-    SkippedExisting,
-    WillGenerate,
-}
 
 pub(crate) struct Plan {
     pub compose_dir: PathBuf,
@@ -35,7 +29,6 @@ pub(crate) struct Plan {
     pub deploy_env: String,
     pub deploy_env_changed: bool,
     pub image_set: Option<String>,
-    pub secret_action: SecretAction,
     pub vps: bool,
     pub vps_commented: usize,
 }
@@ -53,7 +46,6 @@ impl std::fmt::Debug for Plan {
             .field("deploy_env", &self.deploy_env)
             .field("deploy_env_changed", &self.deploy_env_changed)
             .field("image_set", &self.image_set)
-            .field("secret_action", &self.secret_action)
             .field("vps", &self.vps)
             .field("vps_commented", &self.vps_commented)
             .finish_non_exhaustive()
@@ -71,7 +63,7 @@ pub fn run(args: InitEnvArgs) -> Result<(), Error> {
     refuse_xtrace()?;
     let process_env: HashMap<String, String> = std::env::vars().collect();
     let cwd = std::env::current_dir().map_err(|e| Error::fail(format!("cannot read cwd: {e}")))?;
-    let plan = plan(&process_env, &cwd, &args, openssl_app_secret)?;
+    let plan = plan(&process_env, &cwd, &args)?;
     execute(&plan)
 }
 
@@ -95,7 +87,6 @@ pub(crate) fn plan(
     process_env: &HashMap<String, String>,
     cwd: &Path,
     args: &InitEnvArgs,
-    secret_gen: impl FnOnce() -> Result<String, Error>,
 ) -> Result<Plan, Error> {
     let compose_dir = resolve_compose_dir_init(process_env, cwd)?;
     let env_file = compose_dir.join(".env");
@@ -131,7 +122,6 @@ pub(crate) fn plan(
 
     let existing_shop_id = last_value(&contents, "SHOPWARE_SHOP_ID");
     let existing_deploy_env = last_value(&contents, "SHOPWARE_DEPLOY_ENV");
-    let existing_app_secret = last_value(&contents, "APP_SECRET");
     let existing_image = last_value(&contents, "IMAGE");
 
     let shop_id_flag = nonempty_flag(args.shop_id.as_deref(), "--shop-id")?;
@@ -159,19 +149,6 @@ pub(crate) fn plan(
             return Err(Error::fail(format!(
                 "Invalid --image '{image}' (no whitespace)."
             )));
-        }
-    }
-
-    let mut secret_action = SecretAction::None;
-    if args.generate_app_secret {
-        if !existing_app_secret.is_empty() {
-            secret_action = SecretAction::SkippedExisting;
-        } else {
-            secret_action = SecretAction::WillGenerate;
-            if !args.dry_run {
-                let secret = secret_gen()?;
-                contents = set_key(&contents, "APP_SECRET", &secret);
-            }
         }
     }
 
@@ -206,7 +183,6 @@ pub(crate) fn plan(
         deploy_env,
         deploy_env_changed,
         image_set,
-        secret_action,
         vps: args.vps,
         vps_commented,
     })
@@ -256,23 +232,6 @@ fn validate_deploy_env(name: &str) -> Result<(), Error> {
     }
 }
 
-fn openssl_app_secret() -> Result<String, Error> {
-    let out = Command::new("openssl")
-        .args(["rand", "-hex", "32"])
-        .output()
-        .map_err(|_| Error::fail("--generate-app-secret needs openssl (openssl rand -hex 32)."))?;
-    if !out.status.success() {
-        return Err(Error::fail(
-            "--generate-app-secret needs openssl (openssl rand -hex 32).",
-        ));
-    }
-    let secret = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if secret.len() != 64 || !secret.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return Err(Error::fail("openssl rand -hex 32 did not return 32 bytes."));
-    }
-    Ok(secret)
-}
-
 fn execute(plan: &Plan) -> Result<(), Error> {
     if !plan.dry_run {
         fs::write(&plan.env_file, &plan.contents)
@@ -320,19 +279,6 @@ pub(crate) fn summary_text(plan: &Plan) -> String {
         let _ = writeln!(s, "  set IMAGE={image}");
         changes += 1;
     }
-    match plan.secret_action {
-        SecretAction::None => {}
-        SecretAction::SkippedExisting => {
-            let _ = writeln!(s, "  APP_SECRET already set; skipped --generate-app-secret");
-        }
-        SecretAction::WillGenerate => {
-            let _ = writeln!(
-                s,
-                "  set APP_SECRET (openssl rand -hex 32; value not printed)"
-            );
-            changes += 1;
-        }
-    }
     if plan.vps {
         if plan.vps_commented > 0 {
             let _ = writeln!(
@@ -350,7 +296,7 @@ pub(crate) fn summary_text(plan: &Plan) -> String {
     }
     let _ = writeln!(
         s,
-        "  left unchanged: MYSQL passwords, APP_URL (fill those by hand)"
+        "  left unchanged: MYSQL passwords, APP_URL, APP_SECRET (fill MYSQL/APP_URL by hand)"
     );
     if !plan.dry_run {
         let _ = writeln!(s, "==> chmod 600 .env");
@@ -424,50 +370,44 @@ mod tests {
             env: None,
             image: None,
             vps: false,
-            generate_app_secret: false,
             dry_run: true,
         }
     }
 
-    fn panic_secret() -> Result<String, Error> {
-        panic!("openssl generator must not run");
-    }
-
     const EXISTING_SECRET: &str = "existing-app-secret-do-not-print-0123456789abcdef";
     const MYSQL_PASS: &str = "super-secret-pass";
-    const FAKE_SECRET: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     #[test]
-    fn dry_run_does_not_need_generator_and_summary_hides_passwords() {
+    fn dry_run_summary_hides_passwords_and_does_not_write() {
         let shop = TempShop::new("dry");
         shop.write_env(&format!(
             "\
 SHOPWARE_SHOP_ID=
 SHOPWARE_DEPLOY_ENV=
 MYSQL_PASSWORD={MYSQL_PASS}
+APP_SECRET={EXISTING_SECRET}
 COMPOSE_PROJECT_NAME=sw-shop-acme
 "
         ));
         let mut a = args();
-        a.generate_app_secret = true;
         a.vps = true;
         a.image = Some("ghcr.io/example/acme".into());
-        let p = plan(&process(shop.path()), shop.path(), &a, panic_secret).unwrap();
+        let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert!(p.dry_run);
         assert_eq!(p.shop_id, "acme");
         assert_eq!(p.deploy_env, "live");
         assert_eq!(p.image_set.as_deref(), Some("ghcr.io/example/acme"));
-        assert_eq!(p.secret_action, SecretAction::WillGenerate);
         assert_eq!(p.vps_commented, 1);
-        assert_eq!(last_value(p.contents(), "APP_SECRET"), "");
+        assert_eq!(last_value(p.contents(), "APP_SECRET"), EXISTING_SECRET);
         assert!(!has_key(p.contents(), "COMPOSE_PROJECT_NAME"));
         let text = summary_text(&p);
         assert!(text.contains("DRY-RUN (no write)"));
         assert!(text.contains("set SHOPWARE_SHOP_ID=acme"));
         assert!(text.contains("set SHOPWARE_DEPLOY_ENV=live"));
         assert!(text.contains("set IMAGE=ghcr.io/example/acme"));
-        assert!(text.contains("value not printed"));
         assert!(text.contains("commented 1 COMPOSE_PROJECT_NAME"));
+        assert!(text.contains("APP_SECRET"));
+        assert!(!text.contains("generate-app-secret"));
         assert!(!text.contains(MYSQL_PASS));
         assert!(!text.contains(EXISTING_SECRET));
         assert!(
@@ -501,7 +441,7 @@ NEW_FROM_EXAMPLE=1
         a.dry_run = false;
         a.vps = true;
         a.env = Some(DeployEnv::Staging);
-        let p = plan(&process(shop.path()), shop.path(), &a, panic_secret).unwrap();
+        let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert!(p.merged_keys.contains(&"NEW_FROM_EXAMPLE".into()));
         assert!(!p.merged_keys.contains(&"MYSQL_PASSWORD".into()));
         assert_eq!(last_value(p.contents(), "SHOPWARE_SHOP_ID"), "acme");
@@ -520,8 +460,8 @@ NEW_FROM_EXAMPLE=1
     }
 
     #[test]
-    fn skip_generate_when_secret_exists() {
-        let shop = TempShop::new("skip-secret");
+    fn leaves_existing_app_secret_unchanged() {
+        let shop = TempShop::new("keep-secret");
         shop.write_env(&format!(
             "\
 SHOPWARE_SHOP_ID=acme
@@ -532,22 +472,20 @@ MYSQL_PASSWORD={MYSQL_PASS}
         ));
         let mut a = args();
         a.shop_id = None;
-        a.generate_app_secret = true;
         a.dry_run = false;
-        let p = plan(&process(shop.path()), shop.path(), &a, panic_secret).unwrap();
-        assert_eq!(p.secret_action, SecretAction::SkippedExisting);
+        let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert_eq!(last_value(p.contents(), "APP_SECRET"), EXISTING_SECRET);
         let text = summary_text(&p);
-        assert!(text.contains("APP_SECRET already set; skipped --generate-app-secret"));
         assert!(!text.contains(EXISTING_SECRET));
         assert!(!text.contains(MYSQL_PASS));
+        assert!(!text.contains("generate-app-secret"));
         assert!(!p.shop_id_changed);
         assert!(!p.deploy_env_changed);
     }
 
     #[test]
-    fn generate_secret_on_write_uses_generator_once() {
-        let shop = TempShop::new("gen");
+    fn does_not_generate_empty_app_secret() {
+        let shop = TempShop::new("empty-secret");
         shop.write_env(
             "\
 SHOPWARE_SHOP_ID=acme
@@ -557,16 +495,12 @@ MYSQL_PASSWORD=super-secret-pass
         );
         let mut a = args();
         a.dry_run = false;
-        a.generate_app_secret = true;
-        let p = plan(&process(shop.path()), shop.path(), &a, || {
-            Ok(FAKE_SECRET.to_string())
-        })
-        .unwrap();
-        assert_eq!(p.secret_action, SecretAction::WillGenerate);
-        assert_eq!(last_value(p.contents(), "APP_SECRET"), FAKE_SECRET);
+        let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
+        assert_eq!(last_value(p.contents(), "APP_SECRET"), "");
+        assert!(p.contents().contains("APP_SECRET="));
         let text = summary_text(&p);
-        assert!(text.contains("value not printed"));
-        assert!(!text.contains(FAKE_SECRET));
+        assert!(!text.contains("set APP_SECRET"));
+        assert!(!text.contains("generate-app-secret"));
         assert!(!text.contains("super-secret-pass"));
     }
 
@@ -576,7 +510,7 @@ MYSQL_PASSWORD=super-secret-pass
         shop.write_env("SHOPWARE_DEPLOY_ENV=live\n");
         let mut a = args();
         a.shop_id = None;
-        let err = plan(&process(shop.path()), shop.path(), &a, panic_secret).unwrap_err();
+        let err = plan(&process(shop.path()), shop.path(), &a).unwrap_err();
         match err {
             Error::Fail(m) => {
                 assert!(m.contains("SHOPWARE_SHOP_ID is empty"), "{m}");
@@ -590,7 +524,7 @@ MYSQL_PASSWORD=super-secret-pass
     fn invalid_slug_and_env_and_image() {
         let shop = TempShop::new("bad");
         shop.write_env("SHOPWARE_SHOP_ID=\nSHOPWARE_DEPLOY_ENV=prod\n");
-        let err = plan(&process(shop.path()), shop.path(), &args(), panic_secret).unwrap_err();
+        let err = plan(&process(shop.path()), shop.path(), &args()).unwrap_err();
         match err {
             Error::Fail(m) => assert!(m.contains("Invalid --env 'prod'"), "{m}"),
             other => panic!("{other:?}"),
@@ -599,7 +533,7 @@ MYSQL_PASSWORD=super-secret-pass
         shop.write_env("SHOPWARE_SHOP_ID=\n");
         let mut a = args();
         a.shop_id = Some("ACME".into());
-        let err = plan(&process(shop.path()), shop.path(), &a, panic_secret).unwrap_err();
+        let err = plan(&process(shop.path()), shop.path(), &a).unwrap_err();
         match err {
             Error::Fail(m) => assert!(m.contains("Invalid --shop-id 'ACME'"), "{m}"),
             other => panic!("{other:?}"),
@@ -607,7 +541,7 @@ MYSQL_PASSWORD=super-secret-pass
 
         a.shop_id = Some("acme".into());
         a.image = Some("ghcr.io/example/acme with space".into());
-        let err = plan(&process(shop.path()), shop.path(), &a, panic_secret).unwrap_err();
+        let err = plan(&process(shop.path()), shop.path(), &a).unwrap_err();
         match err {
             Error::Fail(m) => assert!(m.contains("no whitespace"), "{m}"),
             other => panic!("{other:?}"),
@@ -624,7 +558,7 @@ SHOPWARE_DEPLOY_ENV=live
 MYSQL_PASSWORD=example-secret
 ",
         );
-        let p = plan(&process(shop.path()), shop.path(), &args(), panic_secret).unwrap();
+        let p = plan(&process(shop.path()), shop.path(), &args()).unwrap();
         assert!(p.copied);
         assert!(p.merged_keys.is_empty());
         assert_eq!(last_value(p.contents(), "MYSQL_PASSWORD"), "example-secret");
@@ -640,7 +574,7 @@ MYSQL_PASSWORD=example-secret
         shop.write_env("SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=playground\n");
         let mut a = args();
         a.shop_id = None;
-        let p = plan(&process(shop.path()), shop.path(), &a, panic_secret).unwrap();
+        let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert_eq!(p.deploy_env, "playground");
         assert!(!p.deploy_env_changed);
         assert!(summary_text(&p).contains("no changes (already up to date)"));

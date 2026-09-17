@@ -29,7 +29,7 @@ those scripts. Use the CLI column.
 
 | Historical overlay (removed) | CLI | Nested verbs | Flags | Status |
 | --- | --- | --- | --- | --- |
-| `deploy/init-env.sh` | `fyrst-cli shopware env init` | `init` | `--shop-id`, `--env`, `--image`, `--vps`, `--generate-app-secret`, `--dry-run` | **implemented** |
+| `deploy/init-env.sh` | `fyrst-cli shopware env init` | `init` | `--shop-id`, `--env`, `--image`, `--vps`, `--dry-run` | **implemented** |
 | `deploy/vps-release.sh` | `fyrst-cli shopware deploy release` | `release` | `--dry-run`, `--skip-pull` | **implemented** |
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware deploy rollback` | `rollback` | `--dry-run`, `--skip-pull` | **implemented** |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
@@ -90,7 +90,7 @@ Rewrite: `APP_URL` only. CI `VPS_*` secrets stay secrets — they are not shop
 ## Exact env init CLI
 
 ```text
-fyrst-cli shopware env init [--shop-id SLUG] [--env live|staging|playground|dev] [--image REPO] [--vps] [--generate-app-secret] [--dry-run]
+fyrst-cli shopware env init [--shop-id SLUG] [--env live|staging|playground|dev] [--image REPO] [--vps] [--dry-run]
 ```
 
 ## Exact deploy release CLI
@@ -164,7 +164,8 @@ volumes (`media`, `files`, `thumbnail`, `theme`, `sitemap`) restore from
 
 Finish shop-root `.env` after `shopware-cli project create` + Flex. Historically
 mapped to overlay `deploy/init-env.sh` (removed). Does **not** overwrite the
-whole file, invent `MYSQL_*` passwords, or set `APP_URL`. This is **not** a
+whole file, invent `MYSQL_*` passwords, set `APP_URL`, or generate
+`APP_SECRET` (`shopware-cli project create` writes that). This is **not** a
 dump command.
 
 Resolves shop root (`COMPOSE_DIR` if set, else walk from cwd for `.env` or
@@ -180,14 +181,13 @@ shell expansion**), same parser as import (`src/shopware/envfile.rs`).
 4. `--image` sets `IMAGE` (no whitespace). Unset leaves `IMAGE` as-is.
 5. `--vps` comments out uncommented `COMPOSE_PROJECT_NAME=…` lines (create
    footgun on a VPS). Does not leave an empty `COMPOSE_PROJECT_NAME=`.
-6. `--generate-app-secret`: `openssl rand -hex 32` only if `APP_SECRET` is
-   empty; the value is never printed.
-7. `--dry-run` prints the summary and does not write `.env`.
-8. After a real write: `chmod 600 .env`.
+6. `--dry-run` prints the summary and does not write `.env`.
+7. After a real write: `chmod 600 .env`.
 
-Refuses a bash xtrace equivalent (`SHELLOPTS=xtrace` / `BASH_XTRACEFD`) so
-credentials in `.env` cannot leak via trace. Summary never prints secret
-values (MYSQL passwords, `APP_SECRET`).
+Does not generate `APP_SECRET` (no dedicated read/write of that key). Refuses a
+bash xtrace equivalent (`SHELLOPTS=xtrace` / `BASH_XTRACEFD`) so credentials
+in `.env` cannot leak via trace. Summary never prints secret values (MYSQL
+passwords).
 
 ## Exact deploy rollback CLI
 
@@ -555,7 +555,7 @@ This CLI reads shop identity and secrets from the environment / shop-root
 | Area | Variables |
 | --- | --- |
 | Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`, `COMPOSE_PROJECT_NAME` |
-| Env init | `APP_SECRET` (optional `--generate-app-secret`; never logged), `IMAGE` |
+| Env init | `IMAGE` (`APP_SECRET` is Shopware's; `shopware-cli project create` writes it) |
 | Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SHOPWARE_ALLOW_LIVE_RESTORE` |
 | Restore volumes | `SHOPWARE_DATA_ROOT`, `SHOPWARE_DATA_BASE` |
 | Rewrite | `APP_URL`, `IMAGE` |
