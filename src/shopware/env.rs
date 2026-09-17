@@ -42,8 +42,21 @@ const PROCESS_WINS: &[&str] = &[
 ];
 
 /// Root `.env.*` only. Later file wins. Never `deploy/*.env`.
-/// Same order as VPS `docker compose --env-file` flags.
+/// Same order as `docker compose --env-file` flags.
 pub const ENV_FILES: &[&str] = &[".env", ".env.local", ".env.prod"];
+
+/// `--env-file` flags: always `.env`, then `.env.local` / `.env.prod` if present.
+pub fn compose_env_file_flags(compose_dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for rel in ENV_FILES {
+        if *rel != ".env" && !compose_dir.join(rel).is_file() {
+            continue;
+        }
+        out.push("--env-file".into());
+        out.push((*rel).to_string());
+    }
+    out
+}
 
 pub const COMPOSE_FILES: &[&str] = &[
     "deploy/compose.yaml",

@@ -276,8 +276,10 @@ from the process environment win when non-empty). Requires `SHOPWARE_SHOP_ID`.
 
 1. If a compose `mysql` service is present: on execute,
    `docker compose … up -d --no-build mysql`, wait until pingable, then
-   `gzip -dc FILE | docker compose --env-file .env -f … -p <shop-id>-<env> exec -T mysql sh -c
-   '<mysql|mariadb>'` (plain `.sql` is stdin, not gzip).
+   `gzip -dc FILE | docker compose --env-file .env [--env-file .env.local] [--env-file .env.prod] -f … exec -T mysql sh -c
+   '<mysql|mariadb>'` (plain `.sql` is stdin, not gzip). There is no `-p`;
+   project name is compose `name:` (VPS `deploy/compose.yaml` or local
+   `compose.override.yaml`) interpolating host env files.
 2. Else `DATABASE_URL` to a real host: `gzip -dc FILE | docker run --rm -i
    --network host <mysql:8.4|mariadb:11.4> mysql <database>`. Host `mysql`
    without a bundled service is refused.
@@ -578,7 +580,7 @@ This CLI reads shop identity and secrets from the environment / shop-root
 
 | Area | Variables |
 | --- | --- |
-| Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID` (shared `.env`), `SHOPWARE_DEPLOY_ENV` and `COMPOSE_PROJECT_NAME=<shop-id>-<env>` (`.env.local` / `.env.prod`), `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`. Do not put `COMPOSE_PROJECT_NAME` or `SHOPWARE_DEPLOY_ENV` in committed `.env`. Local Compose project is `<shop-id>-<env>` via host `.env.local` plus gitignored `compose.override.yaml` `name:` (not the folder basename). VPS compose SoT is `deploy/compose.yaml` `name:` interpolating host env files (no `-p`). |
+| Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID` (shared `.env`), `SHOPWARE_DEPLOY_ENV` and `COMPOSE_PROJECT_NAME=<shop-id>-<env>` (`.env.local` / `.env.prod`), `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`. Do not put `COMPOSE_PROJECT_NAME` or `SHOPWARE_DEPLOY_ENV` in committed `.env`. Local Compose project is `<shop-id>-<env>` via host `.env.local` plus gitignored `compose.override.yaml` `name:` (not the folder basename). Compose SoT for VPS, db import, and rewrite is `name:` interpolating host env files (no `-p`). |
 | Env init | `IMAGE` (`APP_SECRET` is Shopware's; `shopware-cli project create` writes it) |
 | Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SHOPWARE_ALLOW_LIVE_RESTORE` |
 | Restore volumes | `SHOPWARE_DATA_ROOT`, `SHOPWARE_DATA_BASE` |

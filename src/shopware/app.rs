@@ -1,6 +1,6 @@
 //! App container pause/resume and post-restore hints (recipes `lib/sync-app.sh`).
 
-use super::env::{vps_project_name_opt, ShopEnv};
+use super::env::ShopEnv;
 use super::error::Error;
 use super::mysql::{compose_argv, require_docker};
 use std::path::Path;
@@ -11,7 +11,6 @@ const APP_SERVICES: &[&str] = &["web", "worker", "scheduler"];
 pub fn stop_app_containers(
     compose_dir: &Path,
     files: &[String],
-    project: Option<&str>,
     dry_run: bool,
 ) -> Result<Vec<String>, Error> {
     if dry_run {
@@ -22,7 +21,7 @@ pub fn stop_app_containers(
         return Ok(Vec::new());
     }
     require_docker()?;
-    let mut args = compose_argv(files, project);
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "--profile".into(),
         "worker".into(),
@@ -52,8 +51,8 @@ pub fn stop_app_containers(
             continue;
         }
         println!("==> Stopping {svc} for restore");
-        if !compose_stop(compose_dir, files, project, svc) {
-            let mut with_profile = compose_argv(files, project);
+        if !compose_stop(compose_dir, files, svc) {
+            let mut with_profile = compose_argv(compose_dir, files);
             with_profile.extend([
                 "--profile".into(),
                 (*svc).into(),
@@ -72,8 +71,8 @@ pub fn stop_app_containers(
     Ok(stopped)
 }
 
-fn compose_stop(compose_dir: &Path, files: &[String], project: Option<&str>, svc: &str) -> bool {
-    let mut args = compose_argv(files, project);
+fn compose_stop(compose_dir: &Path, files: &[String], svc: &str) -> bool {
+    let mut args = compose_argv(compose_dir, files);
     args.extend(["stop".into(), svc.into()]);
     Command::new("docker")
         .args(&args)
@@ -88,7 +87,6 @@ fn compose_stop(compose_dir: &Path, files: &[String], project: Option<&str>, svc
 pub fn start_stopped_app(
     compose_dir: &Path,
     files: &[String],
-    project: Option<&str>,
     stopped: &[String],
     dry_run: bool,
 ) -> Result<(), Error> {
@@ -101,7 +99,7 @@ pub fn start_stopped_app(
             continue;
         }
         println!("==> Starting {svc}");
-        let mut args = compose_argv(files, project);
+        let mut args = compose_argv(compose_dir, files);
         match svc.as_str() {
             "worker" => {
                 args.extend([
@@ -178,8 +176,7 @@ pub fn post_restore_hints(
     }
     if env.get("IMAGE").is_some() && !files.is_empty() {
         println!("==> Trying cache:clear (non-fatal if the image/console is unavailable)");
-        let project = vps_project_name_opt(env);
-        let mut args = compose_argv(files, project.as_deref());
+        let mut args = compose_argv(compose_dir, files);
         args.extend([
             "run".into(),
             "--rm".into(),

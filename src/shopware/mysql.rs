@@ -3,7 +3,7 @@
 //! Used by `shopware db import` (and `sync apply` for the DB). Passwords
 //! must never appear in log lines.
 
-use super::env::ShopEnv;
+use super::env::{compose_env_file_flags, ShopEnv};
 use super::envfile::urldecode;
 use super::error::Error;
 use std::fmt;
@@ -156,34 +156,29 @@ pub fn client_image_for_url(scheme: &str, _env: &ShopEnv) -> String {
     }
 }
 
-/// `docker compose --env-file .env -f …` plus `-p <project>` when set.
+/// `docker compose --env-file … -f …` for db import / rewrite / restore.
 ///
-/// `-p` is Compose's highest-precedence project name and wins over leftover
-/// `COMPOSE_PROJECT_NAME` in `.env`.
-pub fn compose_argv(files: &[String], project: Option<&str>) -> Vec<String> {
-    let mut a = vec!["compose".into(), "--env-file".into(), ".env".into()];
+/// Project name comes from compose `name:` (VPS `deploy/compose.yaml` or local
+/// `compose.override.yaml`) after host env files load in identity order
+/// (always `.env`, then `.env.local` / `.env.prod` when present). There is no
+/// `-p` / `--project-name`.
+pub fn compose_argv(compose_dir: &Path, files: &[String]) -> Vec<String> {
+    let mut a = vec!["compose".into()];
+    a.extend(compose_env_file_flags(compose_dir));
     for f in files {
         a.push("-f".into());
         a.push(f.clone());
     }
-    pin_compose_project(&mut a, project);
     a
 }
 
-pub fn compose_cli_log(files: &[String], project: Option<&str>) -> String {
+pub fn compose_cli_log(compose_dir: &Path, files: &[String]) -> String {
     let mut s = String::from("docker");
-    for a in compose_argv(files, project) {
+    for a in compose_argv(compose_dir, files) {
         s.push(' ');
         s.push_str(&a);
     }
     s
-}
-
-fn pin_compose_project(args: &mut Vec<String>, project: Option<&str>) {
-    if let Some(p) = project.map(str::trim).filter(|s| !s.is_empty()) {
-        args.push("-p".into());
-        args.push(p.to_string());
-    }
 }
 
 pub fn require_docker() -> Result<(), Error> {
@@ -217,17 +212,13 @@ pub fn require_gzip() -> Result<(), Error> {
     }
 }
 
-pub fn compose_up_mysql(
-    compose_dir: &Path,
-    files: &[String],
-    project: Option<&str>,
-) -> Result<(), Error> {
+pub fn compose_up_mysql(compose_dir: &Path, files: &[String]) -> Result<(), Error> {
     if files.is_empty() {
         return Err(Error::fail(
             "No compose files found under shop root; cannot start service mysql.",
         ));
     }
-    let mut args = compose_argv(files, project);
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "up".into(),
         "-d".into(),
@@ -244,11 +235,11 @@ pub fn compose_up_mysql(
             "docker compose up mysql failed. Is Docker running, and is the mysql service defined?",
         ));
     }
-    wait_mysql(compose_dir, files, project)
+    wait_mysql(compose_dir, files)
 }
 
-fn wait_mysql(compose_dir: &Path, files: &[String], project: Option<&str>) -> Result<(), Error> {
-    let mut args = compose_argv(files, project);
+fn wait_mysql(compose_dir: &Path, files: &[String]) -> Result<(), Error> {
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "exec".into(),
         "-T".into(),
@@ -378,12 +369,21 @@ mod tests {
     }
 
     #[test]
-    fn compose_argv_pins_vps_project_after_files() {
+    fn compose_argv_loads_host_env_files_without_project_flag() {
         let files = vec![
             "deploy/compose.yaml".into(),
             "deploy/compose.prod.yaml".into(),
         ];
-        let a = compose_argv(&files, Some("acme-staging"));
+        let dir = std::env::temp_dir().join(format!(
+            "fyrst-cli-compose-argv-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let a = compose_argv(&dir, &files);
         assert_eq!(
             a,
             vec![
@@ -394,18 +394,35 @@ mod tests {
                 "deploy/compose.yaml",
                 "-f",
                 "deploy/compose.prod.yaml",
-                "-p",
-                "acme-staging",
             ]
         );
-        let log = compose_cli_log(&files, Some("acme-live"));
-        assert!(log.contains("-p acme-live"), "{log}");
+        assert!(!a.iter().any(|s| s == "-p" || s == "--project-name"));
+        let log = compose_cli_log(&dir, &files);
         assert!(
             log.starts_with("docker compose --env-file .env -f deploy/compose.yaml"),
             "{log}"
         );
-        let plain = compose_argv(&files, None);
-        assert!(!plain.iter().any(|s| s == "-p"));
+        assert!(!log.split_whitespace().any(|t| t == "-p"), "{log}");
+
+        fs::write(dir.join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+        fs::write(dir.join(".env.prod"), "").unwrap();
+        let with_host = compose_argv(&dir, &files);
+        assert_eq!(
+            with_host
+                .windows(2)
+                .filter(|w| w[0] == "--env-file")
+                .count(),
+            3
+        );
+        assert!(with_host.windows(2).any(|w| w == ["--env-file", ".env"]));
+        assert!(with_host
+            .windows(2)
+            .any(|w| w == ["--env-file", ".env.local"]));
+        assert!(with_host
+            .windows(2)
+            .any(|w| w == ["--env-file", ".env.prod"]));
+        assert!(!with_host.iter().any(|s| s == "-p" || s == "--project-name"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

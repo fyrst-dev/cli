@@ -182,7 +182,9 @@ fyrst-cli shopware env init --shop-id acme --env live --image ghcr.io/example/ac
 ### db import
 
 Needs `SHOPWARE_SHOP_ID` and a Compose `mysql` service (preferred) or
-`DATABASE_URL` to a real host.
+`DATABASE_URL` to a real host. Bundled mysql uses the same Compose naming as
+VPS: `name:` interpolating host env files (`--env-file .env`, then
+`.env.local` / `.env.prod` when present). There is no `-p`.
 
 ```bash
 fyrst-cli shopware db import --file /tmp/db.sql.gz --dry-run

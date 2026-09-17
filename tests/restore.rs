@@ -295,6 +295,12 @@ fn rewrite_dry_run_is_compose_console() {
         !log.to_ascii_lowercase().contains("update sales_channel"),
         "{log}"
     );
+    assert!(log.contains("--env-file .env"), "{log}");
+    assert!(
+        !log.split_whitespace()
+            .any(|t| t == "-p" || t == "--project-name"),
+        "{log}"
+    );
 }
 
 #[test]

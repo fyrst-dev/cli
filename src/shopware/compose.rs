@@ -13,24 +13,11 @@
 //! Never builds images. `compose up` uses `--no-build`. `compose run` uses
 //! `--pull never` (Compose v5 dropped `--no-build` on `run`).
 
-use super::env::{COMPOSE_FILES, ENV_FILES};
+use super::env::{compose_env_file_flags, COMPOSE_FILES};
 use super::error::Error;
 use super::mysql::require_docker;
 use std::path::Path;
 use std::process::{Command, Stdio};
-
-/// `--env-file` flags: always `.env`, then `.env.local` / `.env.prod` if present.
-pub fn vps_env_file_flags(compose_dir: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    for rel in ENV_FILES {
-        if *rel != ".env" && !compose_dir.join(rel).is_file() {
-            continue;
-        }
-        out.push("--env-file".into());
-        out.push((*rel).to_string());
-    }
-    out
-}
 
 /// The three overlay compose files plus host env files.
 ///
@@ -38,7 +25,7 @@ pub fn vps_env_file_flags(compose_dir: &Path) -> Vec<String> {
 /// All overlay files must exist for VPS release/rollback.
 pub fn vps_compose_argv(compose_dir: &Path) -> Vec<String> {
     let mut a = vec!["compose".into()];
-    a.extend(vps_env_file_flags(compose_dir));
+    a.extend(compose_env_file_flags(compose_dir));
     for f in COMPOSE_FILES {
         a.push("-f".into());
         a.push((*f).to_string());
