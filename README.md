@@ -154,10 +154,11 @@ Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, optional
 Does not overwrite the whole `.env`. Does not invent MYSQL passwords or
 `APP_URL`. Does not generate `APP_SECRET` (`shopware-cli project create`
 already writes it). `--shop-id` is required unless `SHOPWARE_SHOP_ID` is
-already set. `--env` defaults to `live`. Uncommented `COMPOSE_PROJECT_NAME`
-lines are always commented out (Compose SoT is `SHOPWARE_SHOP_ID` +
-`SHOPWARE_DEPLOY_ENV`). `.env` may still be missing; missing keys are
-merged from `.env.example`.
+already set. `--env` defaults to `live`. Sets
+`COMPOSE_PROJECT_NAME=shopware-<shop-id>` so local `shopware-cli project
+dev` and Compose share a stable name (create writes
+`COMPOSE_PROJECT_NAME=sw-…`; no env suffix). `.env` may still be missing;
+missing keys are merged from `.env.example`.
 
 ```bash
 fyrst-cli shopware env init --shop-id acme --dry-run

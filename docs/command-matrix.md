@@ -179,9 +179,11 @@ shell expansion**), same parser as import (`src/shopware/envfile.rs`).
 3. `--env` is `live` | `staging` | `playground` | `dev`. Default `live` when
    unset/empty; keep an existing non-empty value.
 4. `--image` sets `IMAGE` (no whitespace). Unset leaves `IMAGE` as-is.
-5. Always comments out uncommented `COMPOSE_PROJECT_NAME=…` lines (create
-   writes `COMPOSE_PROJECT_NAME=sw-…`; Compose SoT is `SHOPWARE_SHOP_ID` +
-   `SHOPWARE_DEPLOY_ENV`). Does not leave an empty `COMPOSE_PROJECT_NAME=`.
+5. Sets `COMPOSE_PROJECT_NAME=shopware-<shop-id>` so local
+   `shopware-cli project dev` and Compose share a stable name (create writes
+   `COMPOSE_PROJECT_NAME=sw-…`). Pattern is exactly `shopware-<shop-id>` —
+   no `SHOPWARE_DEPLOY_ENV` suffix. If the file only has a commented
+   `# COMPOSE_PROJECT_NAME=…` line, an uncommented assignment is appended.
 6. `--dry-run` prints the summary and does not write `.env`.
 7. After a real write: `chmod 600 .env`.
 

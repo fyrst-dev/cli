@@ -47,9 +47,6 @@ pub fn has_key(contents: &str, key: &str) -> bool {
 pub const MERGE_FROM_EXAMPLE_HEADER: &str =
     "# --- missing keys merged from .env.example by deploy/init-env.sh ---";
 
-pub const COMPOSE_PROJECT_NAME_COMMENT_SUFFIX: &str =
-    " # commented by deploy/init-env.sh (restore for local project dev)";
-
 /// Replace every uncommented `KEY=` line, or append `KEY=value`.
 /// Preserves an `export` prefix. Does not quote `value` (overlay `env_set_key`).
 pub fn set_key(contents: &str, key: &str, value: &str) -> String {
@@ -81,27 +78,6 @@ pub fn set_key(contents: &str, key: &str, value: &str) -> String {
         out.push('\n');
     }
     out
-}
-
-/// Comment uncommented `COMPOSE_PROJECT_NAME=` lines (create footgun).
-/// Returns the rewritten file and how many lines were commented.
-pub fn comment_compose_project_name(contents: &str) -> (String, usize) {
-    let mut out = String::new();
-    let mut n = 0;
-    for line in contents.lines() {
-        let line = trim_cr(line);
-        if uncommented_assignment(line, "COMPOSE_PROJECT_NAME").is_some() {
-            out.push_str("# ");
-            out.push_str(line);
-            out.push_str(COMPOSE_PROJECT_NAME_COMMENT_SUFFIX);
-            out.push('\n');
-            n += 1;
-        } else {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    (out, n)
 }
 
 /// Append assignment lines from `.env.example` whose keys are missing in dest.
@@ -318,29 +294,35 @@ MYSQL_PASSWORD=pa$$word
     }
 
     #[test]
-    fn comment_compose_project_name_skips_already_commented() {
+    fn set_key_rewrites_uncommented_compose_project_name_and_appends_if_only_commented() {
         let src = "\
 COMPOSE_PROJECT_NAME=sw-shop-acme
 export COMPOSE_PROJECT_NAME=other
 # COMPOSE_PROJECT_NAME=keep-commented
 MYSQL_PASSWORD=s3cret
 ";
-        let (out, n) = comment_compose_project_name(src);
-        assert_eq!(n, 2);
-        assert!(!has_key(&out, "COMPOSE_PROJECT_NAME"));
-        assert!(!out
-            .lines()
-            .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
-        assert!(
-            out.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by deploy/init-env.sh")
-        );
-        assert!(
-            out.contains("# export COMPOSE_PROJECT_NAME=other # commented by deploy/init-env.sh")
-        );
-        assert!(!out.contains("--vps"));
+        let out = set_key(src, "COMPOSE_PROJECT_NAME", "shopware-acme");
+        assert_eq!(last_value(&out, "COMPOSE_PROJECT_NAME"), "shopware-acme");
+        assert!(out.contains("COMPOSE_PROJECT_NAME=shopware-acme"));
+        assert!(out.contains("export COMPOSE_PROJECT_NAME=shopware-acme"));
+        assert!(!out.contains("COMPOSE_PROJECT_NAME=sw-shop-acme"));
+        assert!(!out.contains("COMPOSE_PROJECT_NAME=other"));
         assert!(out.contains("# COMPOSE_PROJECT_NAME=keep-commented"));
         assert!(out.contains("MYSQL_PASSWORD=s3cret"));
-        assert!(!out.contains("COMPOSE_PROJECT_NAME=\n"));
+
+        let commented_only = "\
+# COMPOSE_PROJECT_NAME=sw-shop-acme
+MYSQL_PASSWORD=s3cret
+";
+        let appended = set_key(commented_only, "COMPOSE_PROJECT_NAME", "shopware-acme");
+        assert!(appended.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme"));
+        assert!(appended.lines().any(|l| l
+            .trim_start()
+            .starts_with("COMPOSE_PROJECT_NAME=shopware-acme")));
+        assert_eq!(
+            last_value(&appended, "COMPOSE_PROJECT_NAME"),
+            "shopware-acme"
+        );
     }
 
     #[test]

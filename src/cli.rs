@@ -94,8 +94,8 @@ pub enum Command {
 deploy (VPS compose), db (SQL import), sync (between environments / workdir), \
 backup (off-host disaster recovery).\n\n\
 `env init` is implemented: finish shop-root `.env` after create + Flex (merge missing \
-keys from `.env.example`, shop id / deploy env, optional IMAGE; always comments out \
-COMPOSE_PROJECT_NAME). Does not generate APP_SECRET. `--dry-run` prints the \
+keys from `.env.example`, shop id / deploy env, optional IMAGE; sets \
+COMPOSE_PROJECT_NAME=shopware-<shop-id>). Does not generate APP_SECRET. `--dry-run` prints the \
 plan and does not write. Passwords are never printed.\n\n\
 `db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
 one-shot client image for DATABASE_URL). `sync apply` uses that same import module, \
@@ -183,9 +183,9 @@ impl DeployEnv {
 #[command(
     after_help = "Does not overwrite the whole .env. Does not invent MYSQL passwords or APP_URL. \
 Does not generate APP_SECRET (shopware-cli project create writes that). \
-Always comments out uncommented COMPOSE_PROJECT_NAME=… lines (create writes \
-COMPOSE_PROJECT_NAME=sw-…; Compose SoT is SHOPWARE_SHOP_ID + SHOPWARE_DEPLOY_ENV). \
-Does not leave an empty COMPOSE_PROJECT_NAME=.\n\n\
+Sets COMPOSE_PROJECT_NAME=shopware-<shop-id> so local shopware-cli project dev and \
+Compose share a stable name (create writes COMPOSE_PROJECT_NAME=sw-…). \
+Does not append SHOPWARE_DEPLOY_ENV.\n\n\
 Environment:\n  \
   COMPOSE_DIR    Shop checkout (default: walk from cwd for .env / .env.example + deploy/)\n\n\
 Examples:\n  \
