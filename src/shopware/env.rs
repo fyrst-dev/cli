@@ -42,7 +42,8 @@ const PROCESS_WINS: &[&str] = &[
 ];
 
 /// Root `.env.*` only. Later file wins. Never `deploy/*.env`.
-const ENV_FILES: &[&str] = &[".env", ".env.local", ".env.prod"];
+/// Same order as VPS `docker compose --env-file` flags.
+pub const ENV_FILES: &[&str] = &[".env", ".env.local", ".env.prod"];
 
 pub const COMPOSE_FILES: &[&str] = &[
     "deploy/compose.yaml",
@@ -321,8 +322,9 @@ pub fn allow_live_restore(env: &ShopEnv) -> bool {
 /// Compose project `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}`.
 ///
 /// Same string locally (`.env.local` + `compose.override.yaml` `name:`) and
-/// on VPS (`docker compose -p`). Do not store this (or `COMPOSE_PROJECT_NAME`)
-/// in committed `.env`.
+/// on VPS (`deploy/compose.yaml` `name:` interpolating host env files, with
+/// `docker compose -p` as a matching pin). Do not store this (or
+/// `COMPOSE_PROJECT_NAME`) in committed `.env`.
 pub fn vps_project_name(shop_id: &str, deploy_env: &str) -> String {
     format!("{shop_id}-{deploy_env}")
 }
@@ -340,7 +342,7 @@ pub fn vps_project_name_opt(env: &ShopEnv) -> Option<String> {
 /// `(project_name, derived_from_shop_id_and_env)`.
 ///
 /// Prefers `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` so named-volume fallback
-/// matches `docker compose -p`. `COMPOSE_PROJECT_NAME` is a last-resort
+/// matches compose `name:` / `-p`. `COMPOSE_PROJECT_NAME` is a last-resort
 /// fallback when shop id / deploy env are missing.
 pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
     if let Some(n) = vps_project_name_opt(env) {
@@ -350,7 +352,7 @@ pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
         return Ok((n.to_string(), false));
     }
     Err(Error::fail(
-        "Set SHOPWARE_SHOP_ID in shared .env and SHOPWARE_DEPLOY_ENV in .env.local to derive ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV} for Compose (-p).",
+        "Set SHOPWARE_SHOP_ID in shared .env and SHOPWARE_DEPLOY_ENV in .env.local to derive ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV} for Compose (name: + host env files; -p matching pin).",
     ))
 }
 

@@ -192,7 +192,8 @@ Writes SHOPWARE_DEPLOY_ENV and COMPOSE_PROJECT_NAME=<shop-id>-<env> to .env.loca
 (gitignored; created if missing). Upserts top-level Compose name: <shop-id>-<env> \
 in gitignored compose.override.yaml so shopware-cli project dev uses that name \
 (Compose reads COMPOSE_PROJECT_NAME only from project-directory .env, not .env.local). \
-VPS compose pins the same <shop-id>-<env> via identity and docker compose -p.\n\n\
+VPS compose interpolates the same <shop-id>-<env> from deploy/compose.yaml name: plus host \
+env files; docker compose -p is a matching pin.\n\n\
 Environment:\n  \
   COMPOSE_DIR    Shop checkout (default: walk from cwd for .env / .env.example + deploy/)\n\n\
 Examples:\n  \

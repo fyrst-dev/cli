@@ -248,7 +248,7 @@ fn dry_run_prints_same_compose_order_as_release() {
     let log = stdout(&out);
     assert!(
         log.contains(
-            "docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
+            "docker compose --env-file .env --env-file .env.prod -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
         ),
         "{log}"
     );

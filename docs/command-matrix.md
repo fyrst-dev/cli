@@ -110,12 +110,10 @@ Resolves shop root (`COMPOSE_DIR` or walk from cwd), loads `.env` then
 Compose is always:
 
 ```text
-docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p <SHOPWARE_SHOP_ID>-<SHOPWARE_DEPLOY_ENV>
+docker compose --env-file .env [--env-file .env.local] [--env-file .env.prod] -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p <SHOPWARE_SHOP_ID>-<SHOPWARE_DEPLOY_ENV>
 ```
 
-`-p` pins `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` from loaded identity
-(`.env` shop id + `.env.local` / `.env.prod` deploy env). Leftover
-`COMPOSE_PROJECT_NAME` in committed `.env` is ignored.
+Source of truth is `deploy/compose.yaml` `name: "${SHOPWARE_SHOP_ID:?…}-${SHOPWARE_DEPLOY_ENV:?…}"` plus host env files in identity-load order (always `.env`, then `.env.local` / `.env.prod` when those files exist under the shop root). `-p <shop-id>-<env>` is a matching pin from loaded identity (`.env` shop id + `.env.local` / `.env.prod` deploy env). Leftover `COMPOSE_PROJECT_NAME` in committed `.env` is ignored.
 
 Never `--build`. `compose run` uses `--pull never` (not `--no-build`). `compose up`
 uses `--no-build` (and `--pull never` when skipping registry pull). Theme/asset
@@ -202,7 +200,8 @@ shell expansion**), same parser as import (`src/shopware/envfile.rs`).
    `COMPOSE_PROJECT_NAME` only from project-directory `.env`, not `.env.local`,
    so the YAML `name:` is what names the local stack. shopware-cli regenerates
    `compose.yaml` and leaves `compose.override.yaml` for local customization.
-   VPS compose still derives `<shop-id>-<env>` from identity and pins `-p`.
+   VPS compose interpolates the same `<shop-id>-<env>` from `deploy/compose.yaml`
+   `name:` plus host env files; `-p` is a matching pin.
 7. `--dry-run` prints the summary and does not write `.env`, `.env.local`, or
    `compose.override.yaml`.
 8. After a real write: `chmod 600 .env` and `.env.local` (not the override).
@@ -579,7 +578,7 @@ This CLI reads shop identity and secrets from the environment / shop-root
 
 | Area | Variables |
 | --- | --- |
-| Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID` (shared `.env`), `SHOPWARE_DEPLOY_ENV` and `COMPOSE_PROJECT_NAME=<shop-id>-<env>` (`.env.local` / `.env.prod`), `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`. Do not put `COMPOSE_PROJECT_NAME` or `SHOPWARE_DEPLOY_ENV` in committed `.env`. Local Compose project is `<shop-id>-<env>` via host `.env.local` plus gitignored `compose.override.yaml` `name:` (not the folder basename). VPS compose uses `-p <shop-id>-<env>`. |
+| Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID` (shared `.env`), `SHOPWARE_DEPLOY_ENV` and `COMPOSE_PROJECT_NAME=<shop-id>-<env>` (`.env.local` / `.env.prod`), `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`. Do not put `COMPOSE_PROJECT_NAME` or `SHOPWARE_DEPLOY_ENV` in committed `.env`. Local Compose project is `<shop-id>-<env>` via host `.env.local` plus gitignored `compose.override.yaml` `name:` (not the folder basename). VPS compose SoT is `deploy/compose.yaml` `name:` interpolating host env files; `-p <shop-id>-<env>` is a matching pin. |
 | Env init | `IMAGE` (`APP_SECRET` is Shopware's; `shopware-cli project create` writes it) |
 | Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SHOPWARE_ALLOW_LIVE_RESTORE` |
 | Restore volumes | `SHOPWARE_DATA_ROOT`, `SHOPWARE_DATA_BASE` |

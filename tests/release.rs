@@ -192,6 +192,31 @@ fn dry_run_prints_compose_sequence_without_passwords() {
 }
 
 #[test]
+fn dry_run_passes_env_local_and_pins_identity_name() {
+    let shop = TempShop::new("env-local");
+    shop.write_env("");
+    fs::write(shop.path().join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+    let out = release(shop.path(), &["--dry-run"], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={} stdout={}",
+        stderr(&out),
+        stdout(&out)
+    );
+    let log = stdout(&out);
+    assert!(
+        log.contains(
+            "docker compose --env-file .env --env-file .env.local -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
+        ),
+        "{log}"
+    );
+    assert!(log.contains("-p acme-dev"), "{log}");
+    assert!(!log.contains("-p acme-staging"), "{log}");
+    assert!(!log.contains("-p shopware-"), "{log}");
+}
+
+#[test]
 fn skip_pull_dry_run_sets_pull_policy_never() {
     let shop = TempShop::new("skip");
     shop.write_env("");

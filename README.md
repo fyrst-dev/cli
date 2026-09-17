@@ -168,7 +168,9 @@ upserts top-level `name: <shop-id>-<env>` in gitignored
 `compose.override.yaml` (create if missing; replace only that key).
 shopware-cli regenerates `compose.yaml` and leaves `compose.override.yaml`
 for local customization — gitignore it so the env-specific `name:` is not
-committed. VPS still pins `docker compose -p <shop-id>-<env>` from identity.
+committed. VPS interpolates `docker compose` `name: ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}`
+from host env files (always `--env-file .env`, then `.env.local` / `.env.prod`
+when present) and still pins `-p <shop-id>-<env>` as a matching pin.
 `.env` may still be missing; missing keys are merged from `.env.example`
 (not `COMPOSE_PROJECT_NAME` / `SHOPWARE_DEPLOY_ENV`).
 
@@ -194,6 +196,10 @@ Needs `IMAGE`, `IMAGE_TAG` (release), `SHOPWARE_SHOP_ID`, and
 `SHOPWARE_DEPLOY_ENV`. Never builds images. Process-env `IMAGE` / `IMAGE_TAG`
 win over `.env` on release. Rollback ignores process-env `IMAGE_TAG` and reads
 `.previous-tag` only. `--skip-pull` is for same-host / air-gap.
+
+VPS Compose project name is `{shop-id}-{env}`. Source of truth is
+`deploy/compose.yaml` `name:` interpolating host env files (`--env-file .env`,
+then `.env.local` / `.env.prod` when present). `-p` is a matching pin.
 
 ```bash
 fyrst-cli shopware deploy release --dry-run
