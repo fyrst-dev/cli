@@ -108,12 +108,16 @@ fn init_env_help_lists_flags() {
         "--shop-id",
         "--env",
         "--image",
-        "--vps",
         "--dry-run",
         "COMPOSE_DIR",
+        "COMPOSE_PROJECT_NAME",
     ] {
         assert!(help.contains(needle), "missing {needle} in:\n{help}");
     }
+    assert!(
+        !help.contains("--vps"),
+        "env init --help must not list --vps:\n{help}"
+    );
     assert!(
         !help.contains("generate-app-secret"),
         "env init --help must not list --generate-app-secret:\n{help}"
@@ -146,7 +150,6 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
         &[
             "--shop-id",
             "acme",
-            "--vps",
             "--image",
             "ghcr.io/example/acme",
             "--dry-run",
@@ -165,6 +168,7 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
     assert!(log.contains("set SHOPWARE_DEPLOY_ENV=live"), "{log}");
     assert!(log.contains("set IMAGE=ghcr.io/example/acme"), "{log}");
     assert!(log.contains("commented 1 COMPOSE_PROJECT_NAME"), "{log}");
+    assert!(!log.contains("--vps"), "{log}");
     assert!(!log.contains("generate-app-secret"), "{log}");
     assert!(!log.contains("set APP_SECRET"), "{log}");
     assert!(
@@ -178,7 +182,7 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
 }
 
 #[test]
-fn write_merges_example_comments_vps_and_chmod() {
+fn write_merges_example_comments_compose_project_name_and_chmod() {
     let shop = TempShop::new("write");
     fs::write(
         shop.path().join(".env"),
@@ -202,10 +206,7 @@ NEW_FROM_EXAMPLE=1
 ",
     )
     .unwrap();
-    let out = init_env(
-        shop.path(),
-        &["--shop-id", "acme", "--env", "staging", "--vps"],
-    );
+    let out = init_env(shop.path(), &["--shop-id", "acme", "--env", "staging"]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -223,6 +224,7 @@ NEW_FROM_EXAMPLE=1
     assert!(log.contains("set SHOPWARE_SHOP_ID=acme"), "{log}");
     assert!(log.contains("set SHOPWARE_DEPLOY_ENV=staging"), "{log}");
     assert!(log.contains("commented 1 COMPOSE_PROJECT_NAME"), "{log}");
+    assert!(!log.contains("--vps"), "{log}");
     assert_no_secrets(&out, &["from-example"]);
 
     let env = fs::read_to_string(shop.path().join(".env")).unwrap();
@@ -231,9 +233,8 @@ NEW_FROM_EXAMPLE=1
     assert!(env.contains(&format!("MYSQL_PASSWORD={MYSQL_PASS}")));
     assert!(!env.contains("MYSQL_PASSWORD=from-example"));
     assert!(env.contains("NEW_FROM_EXAMPLE=1"));
-    assert!(
-        env.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by deploy/init-env.sh --vps")
-    );
+    assert!(env.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by deploy/init-env.sh"));
+    assert!(!env.contains("--vps"));
     assert!(!env
         .lines()
         .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
@@ -305,6 +306,44 @@ MYSQL_PASSWORD={MYSQL_PASS}
         secret, "",
         "env init must not write APP_SECRET, got {secret:?}"
     );
+}
+
+#[test]
+fn vps_flag_is_rejected() {
+    let shop = TempShop::new("gone-vps");
+    fs::write(shop.path().join(".env"), "SHOPWARE_SHOP_ID=acme\n").unwrap();
+    let out = init_env(shop.path(), &["--vps"]);
+    assert_ne!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let text = combined(&out);
+    assert!(
+        text.contains("unexpected argument") || text.contains("unexpected"),
+        "{text}"
+    );
+}
+
+#[test]
+fn already_commented_compose_project_name_reports_none() {
+    let shop = TempShop::new("already-cpn");
+    fs::write(
+        shop.path().join(".env"),
+        "\
+SHOPWARE_SHOP_ID=acme
+SHOPWARE_DEPLOY_ENV=live
+# COMPOSE_PROJECT_NAME=sw-shop-acme
+",
+    )
+    .unwrap();
+    let out = init_env(shop.path(), &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let log = stdout(&out);
+    assert!(log.contains("no uncommented COMPOSE_PROJECT_NAME"), "{log}");
+    assert!(!log.contains("commented 1 COMPOSE_PROJECT_NAME"), "{log}");
+    assert!(!log.contains("--vps"), "{log}");
+    let env = fs::read_to_string(shop.path().join(".env")).unwrap();
+    assert!(env.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme"));
+    assert!(!env
+        .lines()
+        .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
 }
 
 #[test]

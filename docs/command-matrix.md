@@ -29,7 +29,7 @@ those scripts. Use the CLI column.
 
 | Historical overlay (removed) | CLI | Nested verbs | Flags | Status |
 | --- | --- | --- | --- | --- |
-| `deploy/init-env.sh` | `fyrst-cli shopware env init` | `init` | `--shop-id`, `--env`, `--image`, `--vps`, `--dry-run` | **implemented** |
+| `deploy/init-env.sh` | `fyrst-cli shopware env init` | `init` | `--shop-id`, `--env`, `--image`, `--dry-run` | **implemented** |
 | `deploy/vps-release.sh` | `fyrst-cli shopware deploy release` | `release` | `--dry-run`, `--skip-pull` | **implemented** |
 | `deploy/vps-rollback.sh` | `fyrst-cli shopware deploy rollback` | `rollback` | `--dry-run`, `--skip-pull` | **implemented** |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
@@ -90,7 +90,7 @@ Rewrite: `APP_URL` only. CI `VPS_*` secrets stay secrets — they are not shop
 ## Exact env init CLI
 
 ```text
-fyrst-cli shopware env init [--shop-id SLUG] [--env live|staging|playground|dev] [--image REPO] [--vps] [--dry-run]
+fyrst-cli shopware env init [--shop-id SLUG] [--env live|staging|playground|dev] [--image REPO] [--dry-run]
 ```
 
 ## Exact deploy release CLI
@@ -179,8 +179,9 @@ shell expansion**), same parser as import (`src/shopware/envfile.rs`).
 3. `--env` is `live` | `staging` | `playground` | `dev`. Default `live` when
    unset/empty; keep an existing non-empty value.
 4. `--image` sets `IMAGE` (no whitespace). Unset leaves `IMAGE` as-is.
-5. `--vps` comments out uncommented `COMPOSE_PROJECT_NAME=…` lines (create
-   footgun on a VPS). Does not leave an empty `COMPOSE_PROJECT_NAME=`.
+5. Always comments out uncommented `COMPOSE_PROJECT_NAME=…` lines (create
+   writes `COMPOSE_PROJECT_NAME=sw-…`; Compose SoT is `SHOPWARE_SHOP_ID` +
+   `SHOPWARE_DEPLOY_ENV`). Does not leave an empty `COMPOSE_PROJECT_NAME=`.
 6. `--dry-run` prints the summary and does not write `.env`.
 7. After a real write: `chmod 600 .env`.
 

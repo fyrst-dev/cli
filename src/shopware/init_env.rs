@@ -1,10 +1,12 @@
 //! `fyrst-cli shopware env init` — finish shop-root `.env` after create + Flex.
 //!
-//! Sets fyrst identity (shop id, deploy env, optional IMAGE, `--vps`) and
-//! merges missing keys from `.env.example`. Does not overwrite the whole file,
-//! does not invent MYSQL passwords or `APP_URL`, and does not generate or
-//! rewrite `APP_SECRET` (`shopware-cli project create` writes that). Never
-//! prints secrets. This is not a dump command.
+//! Sets fyrst identity (shop id, deploy env, optional IMAGE) and merges
+//! missing keys from `.env.example`. Always comments out uncommented
+//! `COMPOSE_PROJECT_NAME` lines (create writes `COMPOSE_PROJECT_NAME=sw-…`;
+//! Compose SoT is `SHOPWARE_SHOP_ID` + `SHOPWARE_DEPLOY_ENV`). Does not
+//! overwrite the whole file, does not invent MYSQL passwords or `APP_URL`,
+//! and does not generate or rewrite `APP_SECRET` (`shopware-cli project
+//! create` writes that). Never prints secrets. This is not a dump command.
 
 use super::env::resolve_compose_dir_init;
 use super::envfile::{
@@ -29,8 +31,7 @@ pub(crate) struct Plan {
     pub deploy_env: String,
     pub deploy_env_changed: bool,
     pub image_set: Option<String>,
-    pub vps: bool,
-    pub vps_commented: usize,
+    pub compose_project_name_commented: usize,
 }
 
 impl std::fmt::Debug for Plan {
@@ -46,8 +47,10 @@ impl std::fmt::Debug for Plan {
             .field("deploy_env", &self.deploy_env)
             .field("deploy_env_changed", &self.deploy_env_changed)
             .field("image_set", &self.image_set)
-            .field("vps", &self.vps)
-            .field("vps_commented", &self.vps_commented)
+            .field(
+                "compose_project_name_commented",
+                &self.compose_project_name_commented,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -162,12 +165,7 @@ pub(crate) fn plan(
         contents = set_key(&contents, "IMAGE", image);
     }
 
-    let mut vps_commented = 0;
-    if args.vps {
-        let (next, n) = comment_compose_project_name(&contents);
-        contents = next;
-        vps_commented = n;
-    }
+    let (contents, compose_project_name_commented) = comment_compose_project_name(&contents);
 
     let shop_id_changed = existing_shop_id != shop_id;
     let deploy_env_changed = existing_deploy_env != deploy_env;
@@ -183,8 +181,7 @@ pub(crate) fn plan(
         deploy_env,
         deploy_env_changed,
         image_set,
-        vps: args.vps,
-        vps_commented,
+        compose_project_name_commented,
     })
 }
 
@@ -279,17 +276,15 @@ pub(crate) fn summary_text(plan: &Plan) -> String {
         let _ = writeln!(s, "  set IMAGE={image}");
         changes += 1;
     }
-    if plan.vps {
-        if plan.vps_commented > 0 {
-            let _ = writeln!(
-                s,
-                "  commented {} COMPOSE_PROJECT_NAME=… line(s) (--vps)",
-                plan.vps_commented
-            );
-            changes += 1;
-        } else {
-            let _ = writeln!(s, "  --vps: no uncommented COMPOSE_PROJECT_NAME=… lines");
-        }
+    if plan.compose_project_name_commented > 0 {
+        let _ = writeln!(
+            s,
+            "  commented {} COMPOSE_PROJECT_NAME=… line(s)",
+            plan.compose_project_name_commented
+        );
+        changes += 1;
+    } else {
+        let _ = writeln!(s, "  no uncommented COMPOSE_PROJECT_NAME=… lines");
     }
     if changes == 0 {
         let _ = writeln!(s, "  no changes (already up to date)");
@@ -369,7 +364,6 @@ mod tests {
             shop_id: Some("acme".into()),
             env: None,
             image: None,
-            vps: false,
             dry_run: true,
         }
     }
@@ -390,14 +384,13 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
 "
         ));
         let mut a = args();
-        a.vps = true;
         a.image = Some("ghcr.io/example/acme".into());
         let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert!(p.dry_run);
         assert_eq!(p.shop_id, "acme");
         assert_eq!(p.deploy_env, "live");
         assert_eq!(p.image_set.as_deref(), Some("ghcr.io/example/acme"));
-        assert_eq!(p.vps_commented, 1);
+        assert_eq!(p.compose_project_name_commented, 1);
         assert_eq!(last_value(p.contents(), "APP_SECRET"), EXISTING_SECRET);
         assert!(!has_key(p.contents(), "COMPOSE_PROJECT_NAME"));
         let text = summary_text(&p);
@@ -406,6 +399,7 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
         assert!(text.contains("set SHOPWARE_DEPLOY_ENV=live"));
         assert!(text.contains("set IMAGE=ghcr.io/example/acme"));
         assert!(text.contains("commented 1 COMPOSE_PROJECT_NAME"));
+        assert!(!text.contains("--vps"));
         assert!(text.contains("APP_SECRET"));
         assert!(!text.contains("generate-app-secret"));
         assert!(!text.contains(MYSQL_PASS));
@@ -419,7 +413,7 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
     }
 
     #[test]
-    fn write_path_sets_keys_merges_example_and_comments_vps() {
+    fn write_path_sets_keys_merges_example_and_comments_compose_project_name() {
         let shop = TempShop::new("write");
         shop.write_env(&format!(
             "\
@@ -439,7 +433,6 @@ NEW_FROM_EXAMPLE=1
         );
         let mut a = args();
         a.dry_run = false;
-        a.vps = true;
         a.env = Some(DeployEnv::Staging);
         let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert!(p.merged_keys.contains(&"NEW_FROM_EXAMPLE".into()));
@@ -450,13 +443,62 @@ NEW_FROM_EXAMPLE=1
         assert!(p.contents().contains(MERGE_FROM_EXAMPLE_HEADER));
         assert!(p.contents().contains("NEW_FROM_EXAMPLE=1"));
         assert!(!has_key(p.contents(), "COMPOSE_PROJECT_NAME"));
-        assert!(p.contents().contains(
-            "# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by deploy/init-env.sh --vps"
-        ));
+        assert!(p
+            .contents()
+            .contains("# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by deploy/init-env.sh"));
+        assert!(!p.contents().contains("--vps"));
         let text = summary_text(&p);
         assert!(!text.contains(MYSQL_PASS));
+        assert!(!text.contains("--vps"));
         assert!(text.contains("merge missing keys from .env.example: NEW_FROM_EXAMPLE"));
         assert!(text.contains("set SHOPWARE_DEPLOY_ENV=staging"));
+        assert!(text.contains("commented 1 COMPOSE_PROJECT_NAME"));
+    }
+
+    #[test]
+    fn reports_none_when_compose_project_name_already_commented() {
+        let shop = TempShop::new("already-commented");
+        shop.write_env(
+            "\
+SHOPWARE_SHOP_ID=acme
+SHOPWARE_DEPLOY_ENV=live
+# COMPOSE_PROJECT_NAME=sw-shop-acme
+",
+        );
+        let mut a = args();
+        a.shop_id = None;
+        let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
+        assert_eq!(p.compose_project_name_commented, 0);
+        assert!(p.contents().contains("# COMPOSE_PROJECT_NAME=sw-shop-acme"));
+        let text = summary_text(&p);
+        assert!(text.contains("no uncommented COMPOSE_PROJECT_NAME"));
+        assert!(!text.contains("commented 0"));
+        assert!(!text.contains("--vps"));
+        assert!(text.contains("no changes (already up to date)"));
+    }
+
+    #[test]
+    fn copy_from_example_comments_compose_project_name() {
+        let shop = TempShop::new("copy-cpn");
+        shop.write_example(
+            "\
+SHOPWARE_SHOP_ID=
+COMPOSE_PROJECT_NAME=sw-shop-acme
+MYSQL_PASSWORD=example-secret
+",
+        );
+        let p = plan(&process(shop.path()), shop.path(), &args()).unwrap();
+        assert!(p.copied);
+        assert_eq!(p.compose_project_name_commented, 1);
+        assert!(!has_key(p.contents(), "COMPOSE_PROJECT_NAME"));
+        assert!(p
+            .contents()
+            .contains("# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by deploy/init-env.sh"));
+        let text = summary_text(&p);
+        assert!(text.contains("copy .env.example → .env"));
+        assert!(text.contains("commented 1 COMPOSE_PROJECT_NAME"));
+        assert!(!text.contains("--vps"));
+        assert!(!text.contains("example-secret"));
     }
 
     #[test]
@@ -577,7 +619,10 @@ MYSQL_PASSWORD=example-secret
         let p = plan(&process(shop.path()), shop.path(), &a).unwrap();
         assert_eq!(p.deploy_env, "playground");
         assert!(!p.deploy_env_changed);
-        assert!(summary_text(&p).contains("no changes (already up to date)"));
+        let text = summary_text(&p);
+        assert!(text.contains("no uncommented COMPOSE_PROJECT_NAME"));
+        assert!(!text.contains("--vps"));
+        assert!(text.contains("no changes (already up to date)"));
     }
 
     #[test]
