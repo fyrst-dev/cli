@@ -53,7 +53,7 @@ pub fn console_flag_args(env: &ShopEnv, checkout: &str, dry_run: bool) -> Vec<St
 pub fn compose_rewrite_args(env: &ShopEnv, compose_dir: &Path, dry_run: bool) -> Vec<String> {
     let files = existing_compose_files(compose_dir);
     let checkout = super::live::shop_basename(compose_dir);
-    let mut args = compose_argv(&files);
+    let mut args = compose_argv(compose_dir, &files);
     args.extend([
         "run".into(),
         "--rm".into(),
@@ -75,7 +75,7 @@ pub fn rewrite_log_line(env: &ShopEnv, compose_dir: &Path, dry_run: bool) -> Str
     let flags = console_flag_args(env, &checkout, dry_run);
     format!(
         "{} run --rm --pull never --entrypoint php web bin/console fyrst:sales-channel:rewrite-urls {}",
-        compose_cli_log(&files),
+        compose_cli_log(compose_dir, &files),
         flags.join(" ")
     )
 }
@@ -126,7 +126,7 @@ pub fn maybe_rewrite(
     }
     let checkout = super::live::shop_basename(compose_dir);
     let args = {
-        let mut a = compose_argv(files);
+        let mut a = compose_argv(compose_dir, files);
         a.extend([
             "run".into(),
             "--rm".into(),
@@ -219,13 +219,26 @@ mod tests {
 
     #[test]
     fn compose_line_is_console_not_sql() {
-        let env = env_from(&[("APP_URL", "https://staging.example.com")]);
+        let env = env_from(&[
+            ("APP_URL", "https://staging.example.com"),
+            ("SHOPWARE_SHOP_ID", "acme"),
+            ("SHOPWARE_DEPLOY_ENV", "staging"),
+            ("COMPOSE_PROJECT_NAME", "shopware-acme"),
+        ]);
         let line = rewrite_log_line(&env, Path::new("/shops/acme-staging"), true);
         assert!(line.contains("fyrst:sales-channel:rewrite-urls"), "{line}");
         assert!(
             line.contains("run --rm --pull never --entrypoint php"),
             "{line}"
         );
+        assert!(line.contains("--env-file .env"), "{line}");
+        assert!(
+            !line
+                .split_whitespace()
+                .any(|t| t == "-p" || t == "--project-name"),
+            "{line}"
+        );
+        assert!(!line.contains("shopware-acme"), "{line}");
         assert!(line.contains("--dry-run"), "{line}");
         assert!(
             !line.to_ascii_lowercase().contains("update sales_channel"),
@@ -233,7 +246,36 @@ mod tests {
         );
         let args = compose_rewrite_args(&env, Path::new("/shops/acme-staging"), false);
         assert!(args.contains(&"fyrst:sales-channel:rewrite-urls".to_string()));
+        assert!(!args.iter().any(|a| a == "-p" || a == "--project-name"));
         assert!(!args.iter().any(|a| a == "--dry-run"));
+    }
+
+    #[test]
+    fn rewrite_argv_includes_host_env_files() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("fyrst-cli-rew-env-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(dir.join("deploy")).unwrap();
+        std::fs::write(
+            dir.join("deploy/compose.yaml"),
+            "services:\n  web:\n    image: x\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join(".env.local"), "SHOPWARE_DEPLOY_ENV=staging\n").unwrap();
+        let env = env_from(&[
+            ("APP_URL", "https://staging.example.com"),
+            ("SHOPWARE_SHOP_ID", "acme"),
+            ("SHOPWARE_DEPLOY_ENV", "staging"),
+        ]);
+        let args = compose_rewrite_args(&env, &dir, false);
+        assert!(args.windows(2).any(|w| w == ["--env-file", ".env"]));
+        assert!(args.windows(2).any(|w| w == ["--env-file", ".env.local"]));
+        assert!(args.windows(2).any(|w| w == ["-f", "deploy/compose.yaml"]));
+        assert!(!args.iter().any(|a| a == "-p" || a == "--project-name"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

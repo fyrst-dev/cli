@@ -322,7 +322,7 @@ fn stop_app_containers(
 }
 
 fn list_running_app_services(compose_dir: &Path, files: &[String]) -> Vec<String> {
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "--profile".into(),
         "worker".into(),
@@ -350,7 +350,7 @@ fn list_running_app_services(compose_dir: &Path, files: &[String]) -> Vec<String
 }
 
 fn compose_stop(compose_dir: &Path, files: &[String], svc: &str) {
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     args.extend(["stop".into(), svc.to_string()]);
     let ok = Command::new("docker")
         .args(&args)
@@ -363,7 +363,7 @@ fn compose_stop(compose_dir: &Path, files: &[String], svc: &str) {
     if ok {
         return;
     }
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "--profile".into(),
         svc.to_string(),
@@ -410,7 +410,7 @@ fn compose_up(
     profile: Option<&str>,
     svc: &str,
 ) -> Result<(), Error> {
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     if let Some(p) = profile {
         args.extend(["--profile".into(), p.to_string()]);
     }
@@ -466,7 +466,7 @@ fn post_restore_hints(plan: &RestorePlan) {
 }
 
 fn cache_clear(compose_dir: &Path, files: &[String]) -> Result<(), Error> {
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "run".into(),
         "--rm".into(),
@@ -695,6 +695,14 @@ mod tests {
                 assert!(log_line.contains("--dry-run"), "{log_line}");
                 assert!(!log_line.contains("s3cret-value"), "{log_line}");
                 assert!(docker_args.contains(&"fyrst:sales-channel:rewrite-urls".to_string()));
+                assert!(!docker_args
+                    .iter()
+                    .any(|a| a == "-p" || a == "--project-name"));
+                assert!(docker_args.windows(2).any(|w| w == ["--env-file", ".env"]));
+                assert!(
+                    !log_line.split_whitespace().any(|t| t == "-p"),
+                    "{log_line}"
+                );
                 assert!(!log_line
                     .to_ascii_lowercase()
                     .contains("update sales_channel"));

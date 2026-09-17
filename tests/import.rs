@@ -36,6 +36,7 @@ impl TempShop {
             "\
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=staging
+COMPOSE_PROJECT_NAME=shopware-acme
 MYSQL_USER=shop
 MYSQL_PASSWORD=super-secret-pass
 MYSQL_DATABASE=shopware
@@ -171,6 +172,41 @@ fn dry_run_bundled_mysql_without_password() {
     assert!(log.contains("exec -T mysql"), "{log}");
     assert!(log.contains("docker compose --env-file .env"), "{log}");
     assert!(log.contains("-f deploy/compose.yaml"), "{log}");
+    assert!(
+        !log.split_whitespace()
+            .any(|t| t == "-p" || t == "--project-name"),
+        "{log}"
+    );
+    assert!(!log.contains("-p shopware-acme"), "{log}");
+}
+
+#[test]
+fn dry_run_passes_env_local() {
+    let shop = TempShop::new("env-local");
+    shop.write_min_shop();
+    fs::write(shop.path().join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+    let dump = shop.dump_gz();
+    let out = import(
+        shop.path(),
+        &["--dry-run", "--file", dump.to_str().unwrap()],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={} stdout={}",
+        stderr(&out),
+        stdout(&out)
+    );
+    let log = stdout(&out);
+    assert!(
+        log.contains("docker compose --env-file .env --env-file .env.local -f deploy/compose.yaml"),
+        "{log}"
+    );
+    assert!(
+        !log.split_whitespace()
+            .any(|t| t == "-p" || t == "--project-name"),
+        "{log}"
+    );
 }
 
 #[test]

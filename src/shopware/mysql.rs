@@ -3,7 +3,7 @@
 //! Used by `shopware db import` (and `sync apply` for the DB). Passwords
 //! must never appear in log lines.
 
-use super::env::ShopEnv;
+use super::env::{compose_env_file_flags, ShopEnv};
 use super::envfile::urldecode;
 use super::error::Error;
 use std::fmt;
@@ -156,8 +156,15 @@ pub fn client_image_for_url(scheme: &str, _env: &ShopEnv) -> String {
     }
 }
 
-pub fn compose_argv(files: &[String]) -> Vec<String> {
-    let mut a = vec!["compose".into(), "--env-file".into(), ".env".into()];
+/// `docker compose --env-file … -f …` for db import / rewrite / restore.
+///
+/// Project name comes from compose `name:` (VPS `deploy/compose.yaml` or local
+/// `compose.override.yaml`) after host env files load in identity order
+/// (always `.env`, then `.env.local` / `.env.prod` when present). There is no
+/// `-p` / `--project-name`.
+pub fn compose_argv(compose_dir: &Path, files: &[String]) -> Vec<String> {
+    let mut a = vec!["compose".into()];
+    a.extend(compose_env_file_flags(compose_dir));
     for f in files {
         a.push("-f".into());
         a.push(f.clone());
@@ -165,11 +172,11 @@ pub fn compose_argv(files: &[String]) -> Vec<String> {
     a
 }
 
-pub fn compose_cli_log(files: &[String]) -> String {
-    let mut s = String::from("docker compose --env-file .env");
-    for f in files {
-        s.push_str(" -f ");
-        s.push_str(f);
+pub fn compose_cli_log(compose_dir: &Path, files: &[String]) -> String {
+    let mut s = String::from("docker");
+    for a in compose_argv(compose_dir, files) {
+        s.push(' ');
+        s.push_str(&a);
     }
     s
 }
@@ -211,7 +218,7 @@ pub fn compose_up_mysql(compose_dir: &Path, files: &[String]) -> Result<(), Erro
             "No compose files found under shop root; cannot start service mysql.",
         ));
     }
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "up".into(),
         "-d".into(),
@@ -232,7 +239,7 @@ pub fn compose_up_mysql(compose_dir: &Path, files: &[String]) -> Result<(), Erro
 }
 
 fn wait_mysql(compose_dir: &Path, files: &[String]) -> Result<(), Error> {
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "exec".into(),
         "-T".into(),
@@ -359,6 +366,63 @@ mod tests {
             client_image_for_url("mariadb", &env),
             DEFAULT_MARIADB_CLIENT_IMAGE
         );
+    }
+
+    #[test]
+    fn compose_argv_loads_host_env_files_without_project_flag() {
+        let files = vec![
+            "deploy/compose.yaml".into(),
+            "deploy/compose.prod.yaml".into(),
+        ];
+        let dir = std::env::temp_dir().join(format!(
+            "fyrst-cli-compose-argv-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let a = compose_argv(&dir, &files);
+        assert_eq!(
+            a,
+            vec![
+                "compose",
+                "--env-file",
+                ".env",
+                "-f",
+                "deploy/compose.yaml",
+                "-f",
+                "deploy/compose.prod.yaml",
+            ]
+        );
+        assert!(!a.iter().any(|s| s == "-p" || s == "--project-name"));
+        let log = compose_cli_log(&dir, &files);
+        assert!(
+            log.starts_with("docker compose --env-file .env -f deploy/compose.yaml"),
+            "{log}"
+        );
+        assert!(!log.split_whitespace().any(|t| t == "-p"), "{log}");
+
+        fs::write(dir.join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+        fs::write(dir.join(".env.prod"), "").unwrap();
+        let with_host = compose_argv(&dir, &files);
+        assert_eq!(
+            with_host
+                .windows(2)
+                .filter(|w| w[0] == "--env-file")
+                .count(),
+            3
+        );
+        assert!(with_host.windows(2).any(|w| w == ["--env-file", ".env"]));
+        assert!(with_host
+            .windows(2)
+            .any(|w| w == ["--env-file", ".env.local"]));
+        assert!(with_host
+            .windows(2)
+            .any(|w| w == ["--env-file", ".env.prod"]));
+        assert!(!with_host.iter().any(|s| s == "-p" || s == "--project-name"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

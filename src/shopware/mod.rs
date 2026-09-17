@@ -22,6 +22,7 @@ mod app;
 mod backup;
 mod backup_restore;
 mod compose;
+mod compose_override;
 mod data;
 mod env;
 mod envfile;

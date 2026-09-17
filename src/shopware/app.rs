@@ -21,7 +21,7 @@ pub fn stop_app_containers(
         return Ok(Vec::new());
     }
     require_docker()?;
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     args.extend([
         "--profile".into(),
         "worker".into(),
@@ -52,7 +52,7 @@ pub fn stop_app_containers(
         }
         println!("==> Stopping {svc} for restore");
         if !compose_stop(compose_dir, files, svc) {
-            let mut with_profile = compose_argv(files);
+            let mut with_profile = compose_argv(compose_dir, files);
             with_profile.extend([
                 "--profile".into(),
                 (*svc).into(),
@@ -72,7 +72,7 @@ pub fn stop_app_containers(
 }
 
 fn compose_stop(compose_dir: &Path, files: &[String], svc: &str) -> bool {
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(compose_dir, files);
     args.extend(["stop".into(), svc.into()]);
     Command::new("docker")
         .args(&args)
@@ -99,7 +99,7 @@ pub fn start_stopped_app(
             continue;
         }
         println!("==> Starting {svc}");
-        let mut args = compose_argv(files);
+        let mut args = compose_argv(compose_dir, files);
         match svc.as_str() {
             "worker" => {
                 args.extend([
@@ -176,7 +176,7 @@ pub fn post_restore_hints(
     }
     if env.get("IMAGE").is_some() && !files.is_empty() {
         println!("==> Trying cache:clear (non-fatal if the image/console is unavailable)");
-        let mut args = compose_argv(files);
+        let mut args = compose_argv(compose_dir, files);
         args.extend([
             "run".into(),
             "--rm".into(),

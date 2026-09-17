@@ -151,13 +151,28 @@ Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, optional
 
 ### env init
 
-Does not overwrite the whole `.env`. Does not invent MYSQL passwords or
-`APP_URL`. Does not generate `APP_SECRET` (`shopware-cli project create`
-already writes it). `--shop-id` is required unless `SHOPWARE_SHOP_ID` is
-already set. `--env` defaults to `live`. Uncommented `COMPOSE_PROJECT_NAME`
-lines are always commented out (Compose SoT is `SHOPWARE_SHOP_ID` +
-`SHOPWARE_DEPLOY_ENV`). `.env` may still be missing; missing keys are
-merged from `.env.example`.
+Shop-root `.env` is git-committed and shared. This command does not
+overwrite the whole file, invent MYSQL passwords or `APP_URL`, or generate
+`APP_SECRET` (`shopware-cli project create` already writes it). `--shop-id`
+is required unless `SHOPWARE_SHOP_ID` is already set. `--env` writes
+`SHOPWARE_DEPLOY_ENV` and `COMPOSE_PROJECT_NAME=<shop-id>-<env>` to
+**`.env.local`** (gitignored; created if missing; default `live` when unset
+and no host value). Uncommented `COMPOSE_PROJECT_NAME` (create writes
+`sw-…`) and leftover `SHOPWARE_DEPLOY_ENV` in shared `.env` are
+**commented out** — those keys stay out of the committed file.
+
+Local Compose uses the same project name as VPS (`<shop-id>-<env>`, not the
+folder basename). Compose and `shopware-cli project dev` only auto-read
+`COMPOSE_PROJECT_NAME` from project-directory `.env`, so env init also
+upserts top-level `name: <shop-id>-<env>` in gitignored
+`compose.override.yaml` (create if missing; replace only that key).
+shopware-cli regenerates `compose.yaml` and leaves `compose.override.yaml`
+for local customization — gitignore it so the env-specific `name:` is not
+committed. VPS interpolates `docker compose` `name: ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}`
+from host env files (always `--env-file .env`, then `.env.local` / `.env.prod`
+when present). There is no `-p`.
+`.env` may still be missing; missing keys are merged from `.env.example`
+(not `COMPOSE_PROJECT_NAME` / `SHOPWARE_DEPLOY_ENV`).
 
 ```bash
 fyrst-cli shopware env init --shop-id acme --dry-run
@@ -167,7 +182,9 @@ fyrst-cli shopware env init --shop-id acme --env live --image ghcr.io/example/ac
 ### db import
 
 Needs `SHOPWARE_SHOP_ID` and a Compose `mysql` service (preferred) or
-`DATABASE_URL` to a real host.
+`DATABASE_URL` to a real host. Bundled mysql uses the same Compose naming as
+VPS: `name:` interpolating host env files (`--env-file .env`, then
+`.env.local` / `.env.prod` when present). There is no `-p`.
 
 ```bash
 fyrst-cli shopware db import --file /tmp/db.sql.gz --dry-run
@@ -181,6 +198,10 @@ Needs `IMAGE`, `IMAGE_TAG` (release), `SHOPWARE_SHOP_ID`, and
 `SHOPWARE_DEPLOY_ENV`. Never builds images. Process-env `IMAGE` / `IMAGE_TAG`
 win over `.env` on release. Rollback ignores process-env `IMAGE_TAG` and reads
 `.previous-tag` only. `--skip-pull` is for same-host / air-gap.
+
+VPS Compose project name is `{shop-id}-{env}`. Source of truth is
+`deploy/compose.yaml` `name:` interpolating host env files (`--env-file .env`,
+then `.env.local` / `.env.prod` when present). There is no `-p`.
 
 ```bash
 fyrst-cli shopware deploy release --dry-run

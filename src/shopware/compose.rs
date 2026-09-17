@@ -1,20 +1,31 @@
 //! VPS Compose file list and argv (recipes `deploy/lib/compose.sh`).
 //!
-//! Always invoked from shop-root `COMPOSE_DIR`:
-//! `docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml`
+//! Always invoked from shop-root `COMPOSE_DIR`. Source of truth for the
+//! project name is `deploy/compose.yaml`:
+//! `name: "${SHOPWARE_SHOP_ID:?…}-${SHOPWARE_DEPLOY_ENV:?…}"`.
+//! That interpolates only if host env is loaded, so argv passes `--env-file`
+//! in identity-load order (always `.env`, then `.env.local` / `.env.prod` when
+//! those files exist). There is no `-p` / `--project-name`.
+//!
+//! Example when both host files exist:
+//! `docker compose --env-file .env --env-file .env.local --env-file .env.prod -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml`
 //!
 //! Never builds images. `compose up` uses `--no-build`. `compose run` uses
 //! `--pull never` (Compose v5 dropped `--no-build` on `run`).
 
-use super::env::COMPOSE_FILES;
+use super::env::{compose_env_file_flags, COMPOSE_FILES};
 use super::error::Error;
 use super::mysql::require_docker;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// The three overlay compose files; all must exist for VPS release/rollback.
-pub fn vps_compose_argv() -> Vec<String> {
-    let mut a = vec!["compose".into(), "--env-file".into(), ".env".into()];
+/// The three overlay compose files plus host env files.
+///
+/// Project name comes from `deploy/compose.yaml` `name:` after interpolation.
+/// All overlay files must exist for VPS release/rollback.
+pub fn vps_compose_argv(compose_dir: &Path) -> Vec<String> {
+    let mut a = vec!["compose".into()];
+    a.extend(compose_env_file_flags(compose_dir));
     for f in COMPOSE_FILES {
         a.push("-f".into());
         a.push((*f).to_string());
@@ -88,7 +99,7 @@ pub fn compose_service_names(
     profile_args: &[String],
     extra_env: &[(String, String)],
 ) -> Vec<String> {
-    let mut args = vps_compose_argv();
+    let mut args = vps_compose_argv(compose_dir);
     args.extend(profile_args.iter().cloned());
     args.extend(["config".into(), "--services".into()]);
     let mut cmd = Command::new("docker");
@@ -112,10 +123,58 @@ pub fn compose_service_names(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempShop(PathBuf);
+
+    impl TempShop {
+        fn new(prefix: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let p = std::env::temp_dir().join(format!(
+                "fyrst-cli-compose-{prefix}-{}-{nanos}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+    }
+
+    impl Drop for TempShop {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn env_files(argv: &[String]) -> Vec<&str> {
+        argv.windows(2)
+            .filter(|w| w[0] == "--env-file")
+            .map(|w| w[1].as_str())
+            .collect()
+    }
+
+    fn compose_files(argv: &[String]) -> Vec<&str> {
+        argv.windows(2)
+            .filter(|w| w[0] == "-f")
+            .map(|w| w[1].as_str())
+            .collect()
+    }
+
+    fn assert_no_project_flag(argv: &[String]) {
+        assert!(
+            !argv.iter().any(|s| s == "-p" || s == "--project-name"),
+            "VPS argv must not pass -p/--project-name: {argv:?}"
+        );
+    }
 
     #[test]
     fn vps_argv_is_the_three_overlay_files() {
-        let a = vps_compose_argv();
+        let shop = TempShop::new("base");
+        let a = vps_compose_argv(&shop.0);
         assert_eq!(
             a,
             vec![
@@ -136,5 +195,64 @@ mod tests {
             "docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
         );
         assert!(!args_contain_build(&a));
+        assert_eq!(env_files(&a), [".env"]);
+        assert_eq!(
+            compose_files(&a),
+            [
+                "deploy/compose.yaml",
+                "deploy/compose.prod.yaml",
+                "deploy/compose.vps.yaml"
+            ]
+        );
+        assert_no_project_flag(&a);
+    }
+
+    #[test]
+    fn vps_argv_includes_host_env_files_when_present() {
+        let shop = TempShop::new("host-env");
+        fs::write(shop.0.join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+        fs::write(shop.0.join(".env.prod"), "SHOPWARE_DEPLOY_ENV=live\n").unwrap();
+        let a = vps_compose_argv(&shop.0);
+        assert_eq!(env_files(&a), [".env", ".env.local", ".env.prod"]);
+        assert_eq!(
+            compose_files(&a),
+            [
+                "deploy/compose.yaml",
+                "deploy/compose.prod.yaml",
+                "deploy/compose.vps.yaml"
+            ]
+        );
+        assert_no_project_flag(&a);
+        let log = docker_log(&a);
+        assert_eq!(
+            log,
+            "docker compose --env-file .env --env-file .env.local --env-file .env.prod -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
+        );
+        let env_idx: Vec<usize> = a
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| w[0] == "--env-file")
+            .map(|(i, _)| i)
+            .collect();
+        let dash_f = a.iter().position(|s| s == "-f").unwrap();
+        assert!(env_idx.iter().all(|i| *i < dash_f), "{a:?}");
+    }
+
+    #[test]
+    fn vps_argv_omits_missing_host_env_files() {
+        let shop = TempShop::new("prod-only");
+        fs::write(shop.0.join(".env.prod"), "").unwrap();
+        let a = vps_compose_argv(&shop.0);
+        assert_eq!(env_files(&a), [".env", ".env.prod"]);
+        assert_eq!(
+            compose_files(&a),
+            [
+                "deploy/compose.yaml",
+                "deploy/compose.prod.yaml",
+                "deploy/compose.vps.yaml"
+            ]
+        );
+        assert!(!a.iter().any(|s| s == ".env.local"), "{a:?}");
+        assert_no_project_flag(&a);
     }
 }

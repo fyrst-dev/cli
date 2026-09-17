@@ -94,8 +94,10 @@ pub enum Command {
 deploy (VPS compose), db (SQL import), sync (between environments / workdir), \
 backup (off-host disaster recovery).\n\n\
 `env init` is implemented: finish shop-root `.env` after create + Flex (merge missing \
-keys from `.env.example`, shop id / deploy env, optional IMAGE; always comments out \
-COMPOSE_PROJECT_NAME). Does not generate APP_SECRET. `--dry-run` prints the \
+keys from `.env.example`, shop id, optional IMAGE). Comments out COMPOSE_PROJECT_NAME \
+and leftover SHOPWARE_DEPLOY_ENV in committed `.env`; writes SHOPWARE_DEPLOY_ENV and \
+COMPOSE_PROJECT_NAME=<shop-id>-<env> to `.env.local` and upserts Compose `name:` in \
+gitignored `compose.override.yaml`. Does not generate APP_SECRET. `--dry-run` prints the \
 plan and does not write. Passwords are never printed.\n\n\
 `db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
 one-shot client image for DATABASE_URL). `sync apply` uses that same import module, \
@@ -183,9 +185,15 @@ impl DeployEnv {
 #[command(
     after_help = "Does not overwrite the whole .env. Does not invent MYSQL passwords or APP_URL. \
 Does not generate APP_SECRET (shopware-cli project create writes that). \
-Always comments out uncommented COMPOSE_PROJECT_NAME=… lines (create writes \
-COMPOSE_PROJECT_NAME=sw-…; Compose SoT is SHOPWARE_SHOP_ID + SHOPWARE_DEPLOY_ENV). \
-Does not leave an empty COMPOSE_PROJECT_NAME=.\n\n\
+Shared .env is git-committed: comments out uncommented COMPOSE_PROJECT_NAME=… \
+(create writes COMPOSE_PROJECT_NAME=sw-…) and leftover SHOPWARE_DEPLOY_ENV. \
+Does not set COMPOSE_PROJECT_NAME or SHOPWARE_DEPLOY_ENV in shared .env. \
+Writes SHOPWARE_DEPLOY_ENV and COMPOSE_PROJECT_NAME=<shop-id>-<env> to .env.local \
+(gitignored; created if missing). Upserts top-level Compose name: <shop-id>-<env> \
+in gitignored compose.override.yaml so shopware-cli project dev uses that name \
+(Compose reads COMPOSE_PROJECT_NAME only from project-directory .env, not .env.local). \
+VPS compose interpolates the same <shop-id>-<env> from deploy/compose.yaml name: plus host \
+env files (no -p).\n\n\
 Environment:\n  \
   COMPOSE_DIR    Shop checkout (default: walk from cwd for .env / .env.example + deploy/)\n\n\
 Examples:\n  \
@@ -198,7 +206,7 @@ pub struct InitEnvArgs {
     #[arg(long = "shop-id", value_name = "SLUG")]
     pub shop_id: Option<String>,
 
-    /// live | staging | playground | dev (default live when unset/empty; keep existing non-empty)
+    /// live | staging | playground | dev (written to .env.local with COMPOSE_PROJECT_NAME; default live when unset and no host value)
     #[arg(long = "env", value_enum, value_name = "NAME")]
     pub env: Option<DeployEnv>,
 
@@ -206,7 +214,7 @@ pub struct InitEnvArgs {
     #[arg(long = "image", value_name = "REPO")]
     pub image: Option<String>,
 
-    /// Print the summary; do not write .env
+    /// Print the summary; do not write .env, .env.local, or compose.override.yaml
     #[arg(long)]
     pub dry_run: bool,
 }

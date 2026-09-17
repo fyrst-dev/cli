@@ -6,7 +6,7 @@ use super::compose::{
     args_contain_build, compose_service_names, docker_log, extend_profiles,
     require_vps_compose_files, run_compose, vps_compose_argv,
 };
-use super::env::{derive_project_name, require_shop_id, ShopEnv, DEFAULT_DATA_BASE};
+use super::env::{require_shop_id, vps_project_name, ShopEnv, DEFAULT_DATA_BASE};
 use super::error::Error;
 use super::mysql::log_contains_secret;
 use std::fs;
@@ -150,6 +150,7 @@ pub struct RolloutPlan {
 
 impl RolloutPlan {
     pub fn build(
+        compose_dir: &Path,
         skip_pull: bool,
         pull_policy: String,
         profiles: Vec<String>,
@@ -158,12 +159,12 @@ impl RolloutPlan {
         let pull = if skip_pull {
             None
         } else {
-            let mut a = vps_compose_argv();
+            let mut a = vps_compose_argv(compose_dir);
             extend_profiles(&mut a, &profiles);
             a.push("pull".into());
             Some(a)
         };
-        let mut setup = vps_compose_argv();
+        let mut setup = vps_compose_argv(compose_dir);
         setup.extend([
             "--profile".into(),
             "setup".into(),
@@ -173,14 +174,14 @@ impl RolloutPlan {
             "never".into(),
             "setup".into(),
         ]);
-        let mut web = vps_compose_argv();
+        let mut web = vps_compose_argv(compose_dir);
         web.extend(["up".into(), "-d".into(), "--no-build".into()]);
         web.extend(up_pull_args(skip_pull));
         web.extend(["--remove-orphans".into(), "web".into()]);
         let extra = if profiles.is_empty() {
             None
         } else {
-            let mut a = vps_compose_argv();
+            let mut a = vps_compose_argv(compose_dir);
             extend_profiles(&mut a, &profiles);
             a.extend(["up".into(), "-d".into(), "--no-build".into()]);
             a.extend(up_pull_args(skip_pull));
@@ -224,7 +225,6 @@ pub struct VpsContext {
     pub image_tag: String,
     pub shop_id: String,
     pub deploy_env: String,
-    pub compose_project_name: String,
     pub data_base: String,
     pub data_root: String,
     pub profiles: Vec<String>,
@@ -255,10 +255,6 @@ impl VpsContext {
             ),
             ("SHOPWARE_SHOP_ID".into(), self.shop_id.clone()),
             ("SHOPWARE_DEPLOY_ENV".into(), self.deploy_env.clone()),
-            (
-                "COMPOSE_PROJECT_NAME".into(),
-                self.compose_project_name.clone(),
-            ),
             ("SHOPWARE_DATA_BASE".into(), self.data_base.clone()),
             ("SHOPWARE_DATA_ROOT".into(), self.data_root.clone()),
         ];
@@ -270,6 +266,7 @@ impl VpsContext {
 
     pub fn plan(&self) -> RolloutPlan {
         RolloutPlan::build(
+            &self.compose_dir,
             self.skip_pull,
             self.pull_policy.clone(),
             self.profiles.clone(),
@@ -300,10 +297,10 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
         .get("SHOPWARE_DEPLOY_ENV")
         .map(str::to_string)
         .ok_or_else(|| {
-            Error::fail("Set SHOPWARE_DEPLOY_ENV in .env (live|staging|playground|dev)")
+            Error::fail("Set SHOPWARE_DEPLOY_ENV in .env.local (live|staging|playground|dev)")
         })?;
 
-    let (compose_project_name, project_name_derived) = derive_project_name(env)?;
+    let compose_project_name = vps_project_name(&shop_id, &deploy_env);
     let data_base = env
         .get("SHOPWARE_DATA_BASE")
         .unwrap_or(DEFAULT_DATA_BASE)
@@ -326,24 +323,16 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
     })?;
 
     let mut notes = Vec::new();
-    let mut warnings = live_empty_profiles_warnings(&deploy_env, env.get("COMPOSE_PROFILES"));
-    if !project_name_derived {
-        let derived = format!("{shop_id}-{deploy_env}");
-        if compose_project_name != derived {
-            warnings.push(format!(
-                "COMPOSE_PROJECT_NAME={compose_project_name} is set and overrides Compose name: ({derived})."
+    let warnings = live_empty_profiles_warnings(&deploy_env, env.get("COMPOSE_PROFILES"));
+    if let Some(from_env) = env.get("COMPOSE_PROJECT_NAME") {
+        if from_env != compose_project_name {
+            notes.push(format!(
+                "COMPOSE_PROJECT_NAME={from_env} leftover in env files; VPS project is deploy/compose.yaml name: interpolating host env files ({compose_project_name}). Run env init to comment leftovers in shared .env."
             ));
-            warnings.push(
-                "shopware-cli project create writes COMPOSE_PROJECT_NAME=sw-shop-… into .env for local project dev.".into(),
-            );
-            warnings.push(format!(
-                "On the VPS, remove or comment out that line so the project name is {derived}."
-            ));
-            warnings.push("This script does not delete it (create owns the local flow).".into());
         }
     } else {
         notes.push(format!(
-            "COMPOSE_PROJECT_NAME unset; derived {compose_project_name}"
+            "compose project {compose_project_name} from deploy/compose.yaml name: + host env files"
         ));
     }
     if data_root_derived {
@@ -368,7 +357,6 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
         image_tag,
         shop_id,
         deploy_env,
-        compose_project_name,
         data_base,
         data_root,
         profiles,
@@ -416,7 +404,7 @@ pub fn execute_rollout(ctx: &VpsContext, plan: &RolloutPlan) -> Result<(), Error
 
     if services.iter().any(|s| s == "mysql") {
         println!("==> Starting mysql");
-        let mut a = vps_compose_argv();
+        let mut a = vps_compose_argv(&ctx.compose_dir);
         a.extend(["up".into(), "-d".into(), "--no-build".into()]);
         a.extend(up_pull_args(plan.skip_pull));
         a.push("mysql".into());
@@ -425,7 +413,7 @@ pub fn execute_rollout(ctx: &VpsContext, plan: &RolloutPlan) -> Result<(), Error
 
     if services.iter().any(|s| s == "redis") || ctx.profiles_raw.contains("redis") {
         println!("==> Starting redis");
-        let mut a = vps_compose_argv();
+        let mut a = vps_compose_argv(&ctx.compose_dir);
         a.extend([
             "--profile".into(),
             "redis".into(),
@@ -520,14 +508,16 @@ mod tests {
     use std::collections::HashMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn plan(skip: bool, profiles: &str) -> RolloutPlan {
+    fn plan(skip: bool, profiles: &str) -> (TempShop, RolloutPlan) {
+        let shop = TempShop::new("plan");
         let parsed = parse_profiles(if profiles.is_empty() {
             None
         } else {
             Some(profiles)
         })
         .unwrap();
-        RolloutPlan::build(
+        let p = RolloutPlan::build(
+            &shop.0,
             skip,
             if skip {
                 "never".into()
@@ -536,7 +526,8 @@ mod tests {
             },
             parsed,
             profiles.to_string(),
-        )
+        );
+        (shop, p)
     }
 
     #[test]
@@ -544,10 +535,11 @@ mod tests {
         let (policy, skip) = apply_pull_policy(true, Some("always"));
         assert_eq!(policy, "never");
         assert!(skip);
-        let p = plan(true, "");
+        let (_shop, p) = plan(true, "");
         assert!(p.pull.is_none());
         assert!(p.web.windows(2).any(|w| w == ["--pull", "never"]));
         assert!(p.web.iter().any(|a| a == "--no-build"));
+        assert!(!p.web.iter().any(|a| a == "-p" || a == "--project-name"));
         assert!(!p.setup.iter().any(|a| a == "--no-build"));
         assert!(p.setup.windows(2).any(|w| w == ["--pull", "never"]));
         assert!(p.never_builds());
@@ -558,7 +550,7 @@ mod tests {
         let (policy, skip) = apply_pull_policy(false, Some("never"));
         assert_eq!(policy, "never");
         assert!(skip);
-        let p = plan(false, "redis,worker");
+        let (_shop, p) = plan(false, "redis,worker");
         assert!(p.never_builds());
         let pull = p.pull.clone().expect("pull");
         assert!(pull.ends_with(&["pull".to_string()]));
@@ -614,7 +606,7 @@ mod tests {
 
     #[test]
     fn setup_run_never_uses_no_build() {
-        let p = plan(false, "");
+        let (_shop, p) = plan(false, "");
         let log = docker_log(&p.setup);
         assert!(
             log.contains("--profile setup run --rm --pull never setup"),
@@ -626,6 +618,12 @@ mod tests {
             web.contains("up -d --no-build --remove-orphans web"),
             "{web}"
         );
+        assert!(
+            !web.split_whitespace()
+                .any(|t| t == "-p" || t == "--project-name"),
+            "{web}"
+        );
+        assert!(!web.contains("shopware-acme"), "{web}");
     }
 
     struct TempShop(PathBuf);
@@ -670,6 +668,7 @@ SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=staging
 IMAGE=ghcr.io/file/shop
 IMAGE_TAG=latest
+COMPOSE_PROJECT_NAME=shopware-acme
 MYSQL_PASSWORD=super-secret-pass
 DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
 ",
@@ -683,13 +682,50 @@ DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
         assert_eq!(ctx.image, "ghcr.io/file/shop");
         assert!(ctx.skip_pull);
         assert_eq!(ctx.pull_policy, "never");
-        assert_eq!(ctx.compose_project_name, "acme-staging");
+        assert_eq!(ctx.shop_id, "acme");
+        assert_eq!(ctx.deploy_env, "staging");
+        assert!(ctx.notes.iter().any(|n| n.contains("acme-staging")));
+        assert!(ctx
+            .notes
+            .iter()
+            .any(|n| n.contains("COMPOSE_PROJECT_NAME=shopware-acme")));
+        assert!(ctx
+            .notes
+            .iter()
+            .any(|n| n.contains("deploy/compose.yaml name:") && n.contains("acme-staging")));
+        assert!(!ctx.notes.iter().any(|n| n.contains("-p ")));
+        assert!(!ctx
+            .extra_env()
+            .iter()
+            .any(|(k, _)| k == "COMPOSE_PROJECT_NAME"));
+        assert!(!ctx.warnings.iter().any(|w| w.contains("remove or comment")));
         let plan = ctx.plan();
         assert!(plan.pull.is_none());
+        assert!(!plan.web.iter().any(|a| a == "-p" || a == "--project-name"));
         let web = docker_log_checked(&ctx, &plan.web).unwrap();
         assert!(!ctx.log_contains_secret(&web));
         assert!(!web.contains("s3cret-value"));
         assert!(!web.contains("super-secret-pass"));
+    }
+
+    #[test]
+    fn rollout_plan_passes_host_env_files() {
+        let shop = TempShop::new("host-env");
+        write_vps_files(&shop.0);
+        fs::write(shop.0.join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+        fs::write(shop.0.join(".env.prod"), "").unwrap();
+        let p = RolloutPlan::build(&shop.0, true, "never".into(), Vec::new(), String::new());
+        assert!(p.web.windows(2).any(|w| w == ["--env-file", ".env"]));
+        assert!(p.web.windows(2).any(|w| w == ["--env-file", ".env.local"]));
+        assert!(p.web.windows(2).any(|w| w == ["--env-file", ".env.prod"]));
+        assert!(!p.web.iter().any(|a| a == "-p" || a == "--project-name"));
+        let log = docker_log(&p.web);
+        assert!(
+            log.contains("--env-file .env --env-file .env.local --env-file .env.prod"),
+            "{log}"
+        );
+        assert!(log.contains("-f deploy/compose.yaml"), "{log}");
+        assert!(!log.split_whitespace().any(|t| t == "-p"), "{log}");
     }
 
     #[test]

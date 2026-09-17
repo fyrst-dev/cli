@@ -38,6 +38,7 @@ IMAGE=ghcr.io/example/acme
 IMAGE_TAG=from-env-file
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=staging
+COMPOSE_PROJECT_NAME=shopware-acme
 MYSQL_PASSWORD=super-secret-pass
 DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
 ",
@@ -247,8 +248,13 @@ fn dry_run_prints_same_compose_order_as_release() {
     let log = stdout(&out);
     assert!(
         log.contains(
-            "docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
+            "docker compose --env-file .env --env-file .env.prod -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
         ),
+        "{log}"
+    );
+    assert!(
+        !log.split_whitespace()
+            .any(|t| t == "-p" || t == "--project-name"),
         "{log}"
     );
     let setup_idx = log

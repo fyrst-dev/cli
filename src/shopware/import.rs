@@ -130,10 +130,13 @@ impl ImportPlan {
     pub fn log_line(&self) -> String {
         let decode = decode_log(self.kind, &self.file);
         match &self.target {
-            ImportTarget::Bundled { compose_files, .. } => {
+            ImportTarget::Bundled {
+                compose_dir,
+                compose_files,
+            } => {
                 format!(
                     "{decode} | {} exec -T mysql sh -c '<mysql|mariadb>'",
-                    compose_cli_log(compose_files)
+                    compose_cli_log(compose_dir, compose_files)
                 )
             }
             ImportTarget::External {
@@ -366,8 +369,8 @@ pub fn execute(plan: &ImportPlan) -> Result<(), Error> {
     Ok(())
 }
 
-fn bundled_exec_args(files: &[String]) -> Vec<String> {
-    let mut a = super::mysql::compose_argv(files);
+fn bundled_exec_args(compose_dir: &Path, files: &[String]) -> Vec<String> {
+    let mut a = super::mysql::compose_argv(compose_dir, files);
     a.extend([
         "exec".into(),
         "-T".into(),
@@ -422,7 +425,7 @@ fn external_run_args(target: &ImportTarget) -> Result<Vec<String>, Error> {
 }
 
 fn run_bundled(plan: &ImportPlan, compose_dir: &Path, files: &[String]) -> Result<(), Error> {
-    let args = bundled_exec_args(files);
+    let args = bundled_exec_args(compose_dir, files);
     pipe_sql_into_docker(plan, &args, Some(compose_dir), None)
 }
 
@@ -570,6 +573,7 @@ mod tests {
             "\
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=staging
+COMPOSE_PROJECT_NAME=shopware-acme
 MYSQL_USER=shop
 MYSQL_PASSWORD=super-secret-pass
 MYSQL_DATABASE=shopware
@@ -592,8 +596,46 @@ MYSQL_DATABASE=shopware
         assert!(!log.contains("super-secret-pass"), "{log}");
         assert!(log.contains("gzip -dc"), "{log}");
         assert!(log.contains("exec -T mysql"), "{log}");
+        assert!(log.contains("--env-file .env"), "{log}");
         assert!(log.contains("-f deploy/compose.yaml"), "{log}");
+        assert!(
+            !log.split_whitespace()
+                .any(|t| t == "-p" || t == "--project-name"),
+            "{log}"
+        );
+        assert!(!log.contains("shopware-acme"), "{log}");
         assert!(matches!(plan.target, ImportTarget::Bundled { .. }));
+    }
+
+    #[test]
+    fn bundled_log_includes_host_env_files() {
+        let shop = TempShop::new("host-env");
+        shop.write_env("SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=staging\nMYSQL_USER=u\n");
+        shop.write_compose_mysql();
+        fs::write(shop.path().join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+        fs::write(shop.path().join(".env.prod"), "").unwrap();
+        let dump = shop.dump("db.sql.gz", b"not-a-real-gzip-but-exists");
+        let plan = plan_import(
+            &process(shop.path()),
+            shop.path(),
+            &dump,
+            true,
+            LivePolicy::DbImport {
+                allow_live_flag: false,
+            },
+        )
+        .unwrap();
+        let log = plan.log_line();
+        assert!(
+            log.contains("--env-file .env --env-file .env.local --env-file .env.prod"),
+            "{log}"
+        );
+        assert!(log.contains("-f deploy/compose.yaml"), "{log}");
+        assert!(
+            !log.split_whitespace()
+                .any(|t| t == "-p" || t == "--project-name"),
+            "{log}"
+        );
     }
 
     #[test]
