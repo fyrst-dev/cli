@@ -5,11 +5,10 @@
 //! `name: "${SHOPWARE_SHOP_ID:?…}-${SHOPWARE_DEPLOY_ENV:?…}"`.
 //! That interpolates only if host env is loaded, so argv passes `--env-file`
 //! in identity-load order (always `.env`, then `.env.local` / `.env.prod` when
-//! those files exist). `-p <shop-id>-<env>` is a matching pin (defense in
-//! depth), not the only naming mechanism.
+//! those files exist). There is no `-p` / `--project-name`.
 //!
 //! Example when both host files exist:
-//! `docker compose --env-file .env --env-file .env.local --env-file .env.prod -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p <shop-id>-<env>`
+//! `docker compose --env-file .env --env-file .env.local --env-file .env.prod -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml`
 //!
 //! Never builds images. `compose up` uses `--no-build`. `compose run` uses
 //! `--pull never` (Compose v5 dropped `--no-build` on `run`).
@@ -33,20 +32,17 @@ pub fn vps_env_file_flags(compose_dir: &Path) -> Vec<String> {
     out
 }
 
-/// The three overlay compose files, host env files, plus `-p <project>`.
+/// The three overlay compose files plus host env files.
 ///
-/// `project` is `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` and must match
-/// compose `name:` after interpolation. All overlay files must exist for VPS
-/// release/rollback.
-pub fn vps_compose_argv(compose_dir: &Path, project: &str) -> Vec<String> {
+/// Project name comes from `deploy/compose.yaml` `name:` after interpolation.
+/// All overlay files must exist for VPS release/rollback.
+pub fn vps_compose_argv(compose_dir: &Path) -> Vec<String> {
     let mut a = vec!["compose".into()];
     a.extend(vps_env_file_flags(compose_dir));
     for f in COMPOSE_FILES {
         a.push("-f".into());
         a.push((*f).to_string());
     }
-    a.push("-p".into());
-    a.push(project.to_string());
     a
 }
 
@@ -115,9 +111,8 @@ pub fn compose_service_names(
     compose_dir: &Path,
     profile_args: &[String],
     extra_env: &[(String, String)],
-    project: &str,
 ) -> Vec<String> {
-    let mut args = vps_compose_argv(compose_dir, project);
+    let mut args = vps_compose_argv(compose_dir);
     args.extend(profile_args.iter().cloned());
     args.extend(["config".into(), "--services".into()]);
     let mut cmd = Command::new("docker");
@@ -175,10 +170,24 @@ mod tests {
             .collect()
     }
 
+    fn compose_files(argv: &[String]) -> Vec<&str> {
+        argv.windows(2)
+            .filter(|w| w[0] == "-f")
+            .map(|w| w[1].as_str())
+            .collect()
+    }
+
+    fn assert_no_project_flag(argv: &[String]) {
+        assert!(
+            !argv.iter().any(|s| s == "-p" || s == "--project-name"),
+            "VPS argv must not pass -p/--project-name: {argv:?}"
+        );
+    }
+
     #[test]
     fn vps_argv_is_the_three_overlay_files() {
         let shop = TempShop::new("base");
-        let a = vps_compose_argv(&shop.0, "acme-staging");
+        let a = vps_compose_argv(&shop.0);
         assert_eq!(
             a,
             vec![
@@ -191,24 +200,24 @@ mod tests {
                 "deploy/compose.prod.yaml",
                 "-f",
                 "deploy/compose.vps.yaml",
-                "-p",
-                "acme-staging",
             ]
         );
         let log = docker_log(&a);
         assert_eq!(
             log,
-            "docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p acme-staging"
+            "docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
         );
         assert!(!args_contain_build(&a));
         assert_eq!(env_files(&a), [".env"]);
-    }
-
-    #[test]
-    fn vps_argv_pins_identity_name() {
-        let shop = TempShop::new("pin");
-        let a = vps_compose_argv(&shop.0, "acme-live");
-        assert!(a.windows(2).any(|w| w == ["-p", "acme-live"]), "{a:?}");
+        assert_eq!(
+            compose_files(&a),
+            [
+                "deploy/compose.yaml",
+                "deploy/compose.prod.yaml",
+                "deploy/compose.vps.yaml"
+            ]
+        );
+        assert_no_project_flag(&a);
     }
 
     #[test]
@@ -216,20 +225,22 @@ mod tests {
         let shop = TempShop::new("host-env");
         fs::write(shop.0.join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
         fs::write(shop.0.join(".env.prod"), "SHOPWARE_DEPLOY_ENV=live\n").unwrap();
-        let a = vps_compose_argv(&shop.0, "acme-dev");
+        let a = vps_compose_argv(&shop.0);
         assert_eq!(env_files(&a), [".env", ".env.local", ".env.prod"]);
-        assert!(
-            a.windows(2).any(|w| w == ["-p", "acme-dev"]),
-            "matching pin missing: {a:?}"
+        assert_eq!(
+            compose_files(&a),
+            [
+                "deploy/compose.yaml",
+                "deploy/compose.prod.yaml",
+                "deploy/compose.vps.yaml"
+            ]
         );
+        assert_no_project_flag(&a);
         let log = docker_log(&a);
-        assert!(
-            log.contains(
-                "docker compose --env-file .env --env-file .env.local --env-file .env.prod -f deploy/compose.yaml"
-            ),
-            "{log}"
+        assert_eq!(
+            log,
+            "docker compose --env-file .env --env-file .env.local --env-file .env.prod -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
         );
-        assert!(log.contains("-p acme-dev"), "{log}");
         let env_idx: Vec<usize> = a
             .windows(2)
             .enumerate()
@@ -237,18 +248,24 @@ mod tests {
             .map(|(i, _)| i)
             .collect();
         let dash_f = a.iter().position(|s| s == "-f").unwrap();
-        let dash_p = a.iter().position(|s| s == "-p").unwrap();
         assert!(env_idx.iter().all(|i| *i < dash_f), "{a:?}");
-        assert!(dash_f < dash_p, "{a:?}");
     }
 
     #[test]
     fn vps_argv_omits_missing_host_env_files() {
         let shop = TempShop::new("prod-only");
         fs::write(shop.0.join(".env.prod"), "").unwrap();
-        let a = vps_compose_argv(&shop.0, "acme-staging");
+        let a = vps_compose_argv(&shop.0);
         assert_eq!(env_files(&a), [".env", ".env.prod"]);
+        assert_eq!(
+            compose_files(&a),
+            [
+                "deploy/compose.yaml",
+                "deploy/compose.prod.yaml",
+                "deploy/compose.vps.yaml"
+            ]
+        );
         assert!(!a.iter().any(|s| s == ".env.local"), "{a:?}");
-        assert!(a.windows(2).any(|w| w == ["-p", "acme-staging"]), "{a:?}");
+        assert_no_project_flag(&a);
     }
 }

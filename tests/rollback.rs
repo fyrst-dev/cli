@@ -252,8 +252,11 @@ fn dry_run_prints_same_compose_order_as_release() {
         ),
         "{log}"
     );
-    assert!(log.contains("-p acme-staging"), "{log}");
-    assert!(!log.contains("-p shopware-"), "{log}");
+    assert!(
+        !log.split_whitespace()
+            .any(|t| t == "-p" || t == "--project-name"),
+        "{log}"
+    );
     let setup_idx = log
         .find("--profile setup run --rm --pull never setup")
         .unwrap_or_else(|| panic!("setup missing:\n{log}"));

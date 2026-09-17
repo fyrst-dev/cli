@@ -170,7 +170,7 @@ shopware-cli regenerates `compose.yaml` and leaves `compose.override.yaml`
 for local customization — gitignore it so the env-specific `name:` is not
 committed. VPS interpolates `docker compose` `name: ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}`
 from host env files (always `--env-file .env`, then `.env.local` / `.env.prod`
-when present) and still pins `-p <shop-id>-<env>` as a matching pin.
+when present). There is no `-p`.
 `.env` may still be missing; missing keys are merged from `.env.example`
 (not `COMPOSE_PROJECT_NAME` / `SHOPWARE_DEPLOY_ENV`).
 
@@ -199,7 +199,7 @@ win over `.env` on release. Rollback ignores process-env `IMAGE_TAG` and reads
 
 VPS Compose project name is `{shop-id}-{env}`. Source of truth is
 `deploy/compose.yaml` `name:` interpolating host env files (`--env-file .env`,
-then `.env.local` / `.env.prod` when present). `-p` is a matching pin.
+then `.env.local` / `.env.prod` when present). There is no `-p`.
 
 ```bash
 fyrst-cli shopware deploy release --dry-run

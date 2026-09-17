@@ -157,7 +157,11 @@ fn dry_run_prints_compose_sequence_without_passwords() {
         log.contains("DRY-RUN docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"),
         "{log}"
     );
-    assert!(log.contains("-p acme-staging"), "{log}");
+    assert!(
+        !log.split_whitespace()
+            .any(|t| t == "-p" || t == "--project-name"),
+        "{log}"
+    );
     assert!(!log.contains("-p shopware-acme"), "{log}");
     assert!(
         log.contains("--profile setup run --rm --pull never setup"),
@@ -192,7 +196,7 @@ fn dry_run_prints_compose_sequence_without_passwords() {
 }
 
 #[test]
-fn dry_run_passes_env_local_and_pins_identity_name() {
+fn dry_run_passes_env_local() {
     let shop = TempShop::new("env-local");
     shop.write_env("");
     fs::write(shop.path().join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
@@ -211,9 +215,11 @@ fn dry_run_passes_env_local_and_pins_identity_name() {
         ),
         "{log}"
     );
-    assert!(log.contains("-p acme-dev"), "{log}");
-    assert!(!log.contains("-p acme-staging"), "{log}");
-    assert!(!log.contains("-p shopware-"), "{log}");
+    assert!(
+        !log.split_whitespace()
+            .any(|t| t == "-p" || t == "--project-name"),
+        "{log}"
+    );
 }
 
 #[test]

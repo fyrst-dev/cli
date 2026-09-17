@@ -51,7 +51,7 @@ pub const MERGE_FROM_EXAMPLE_HEADER: &str =
 const SKIP_MERGE_INTO_SHARED_ENV: &[&str] = &["COMPOSE_PROJECT_NAME", "SHOPWARE_DEPLOY_ENV"];
 
 pub const COMPOSE_PROJECT_NAME_COMMENT_SUFFIX: &str =
-    " # commented by fyrst-cli shopware env init (Compose project is ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}; host .env.local + compose.override.yaml / VPS docker compose -p)";
+    " # commented by fyrst-cli shopware env init (Compose project is ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}; host .env.local + compose.override.yaml / VPS compose name:)";
 
 pub const SHOPWARE_DEPLOY_ENV_COMMENT_SUFFIX: &str =
     " # commented by fyrst-cli shopware env init (host-specific; set in .env.local)";

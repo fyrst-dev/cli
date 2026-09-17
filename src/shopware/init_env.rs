@@ -10,7 +10,8 @@
 //! gitignored `compose.override.yaml` so `shopware-cli project dev` uses that
 //! name (Compose auto-reads `COMPOSE_PROJECT_NAME` only from project-directory
 //! `.env`, not `.env.local`). VPS Compose project is the same
-//! `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` via identity + `docker compose -p`.
+//! `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` via `deploy/compose.yaml` `name:`
+//! interpolating host env files.
 //! Does not invent MYSQL passwords or `APP_URL`, and does not generate or
 //! rewrite `APP_SECRET` (`shopware-cli project create` writes that). Never
 //! prints secrets. This is not a dump command.
