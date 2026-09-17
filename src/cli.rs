@@ -94,9 +94,9 @@ pub enum Command {
 deploy (VPS compose), db (SQL import), sync (between environments / workdir), \
 backup (off-host disaster recovery).\n\n\
 `env init` is implemented: finish shop-root `.env` after create + Flex (merge missing \
-keys from `.env.example`, shop id / deploy env, optional IMAGE / APP_SECRET, `--vps` \
-comments COMPOSE_PROJECT_NAME). `--dry-run` prints the plan and does not write. \
-Passwords and APP_SECRET are never printed.\n\n\
+keys from `.env.example`, shop id / deploy env, optional IMAGE, `--vps` \
+comments COMPOSE_PROJECT_NAME). Does not generate APP_SECRET. `--dry-run` prints the \
+plan and does not write. Passwords are never printed.\n\n\
 `db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
 one-shot client image for DATABASE_URL). `sync apply` uses that same import module, \
 restores bind-mount volumes from --snapshot-dir, stops/starts web/worker/scheduler, and \
@@ -181,13 +181,13 @@ impl DeployEnv {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Does not overwrite the whole .env. Does not invent MYSQL passwords or APP_URL.\n\n\
+    after_help = "Does not overwrite the whole .env. Does not invent MYSQL passwords or APP_URL. \
+Does not generate APP_SECRET (shopware-cli project create writes that).\n\n\
 Environment:\n  \
   COMPOSE_DIR    Shop checkout (default: walk from cwd for .env / .env.example + deploy/)\n\n\
 Examples:\n  \
   fyrst-cli shopware env init --shop-id acme\n  \
   fyrst-cli shopware env init --shop-id acme --env live --vps --image ghcr.io/example/acme\n  \
-  fyrst-cli shopware env init --shop-id acme --generate-app-secret\n  \
   fyrst-cli shopware env init --shop-id acme --vps --dry-run\n"
 )]
 pub struct InitEnvArgs {
@@ -206,10 +206,6 @@ pub struct InitEnvArgs {
     /// Comment out COMPOSE_PROJECT_NAME=… lines (create footgun on a VPS)
     #[arg(long)]
     pub vps: bool,
-
-    /// Set APP_SECRET with openssl rand -hex 32 if empty (value is never printed)
-    #[arg(long = "generate-app-secret")]
-    pub generate_app_secret: bool,
 
     /// Print the summary; do not write .env
     #[arg(long)]
@@ -515,7 +511,6 @@ mod tests {
             "--image",
             "ghcr.io/example/acme",
             "--vps",
-            "--generate-app-secret",
             "--dry-run",
         ])
         .unwrap();
@@ -527,11 +522,29 @@ mod tests {
                 assert_eq!(op.env, Some(DeployEnv::Staging));
                 assert_eq!(op.image.as_deref(), Some("ghcr.io/example/acme"));
                 assert!(op.vps);
-                assert!(op.generate_app_secret);
                 assert!(op.dry_run);
             }
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn env_init_rejects_generate_app_secret() {
+        let err = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "env",
+            "init",
+            "--shop-id",
+            "acme",
+            "--generate-app-secret",
+        ])
+        .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("unexpected argument") || text.contains("unexpected"),
+            "{text}"
+        );
     }
 
     #[test]
