@@ -225,7 +225,6 @@ pub struct VpsContext {
     pub image_tag: String,
     pub shop_id: String,
     pub deploy_env: String,
-    pub compose_project_name: String,
     pub data_base: String,
     pub data_root: String,
     pub profiles: Vec<String>,
@@ -328,7 +327,7 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
     if let Some(from_env) = env.get("COMPOSE_PROJECT_NAME") {
         if from_env != compose_project_name {
             notes.push(format!(
-                "COMPOSE_PROJECT_NAME={from_env} in env files is ignored; VPS project is deploy/compose.yaml name: interpolating host env files ({compose_project_name})"
+                "COMPOSE_PROJECT_NAME={from_env} leftover in env files; VPS project is deploy/compose.yaml name: interpolating host env files ({compose_project_name}). Run env init to comment leftovers in shared .env."
             ));
         }
     } else {
@@ -358,7 +357,6 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
         image_tag,
         shop_id,
         deploy_env,
-        compose_project_name,
         data_base,
         data_root,
         profiles,
@@ -684,7 +682,8 @@ DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
         assert_eq!(ctx.image, "ghcr.io/file/shop");
         assert!(ctx.skip_pull);
         assert_eq!(ctx.pull_policy, "never");
-        assert_eq!(ctx.compose_project_name, "acme-staging");
+        assert_eq!(ctx.shop_id, "acme");
+        assert_eq!(ctx.deploy_env, "staging");
         assert!(ctx.notes.iter().any(|n| n.contains("acme-staging")));
         assert!(ctx
             .notes
