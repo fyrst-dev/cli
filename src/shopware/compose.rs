@@ -3,8 +3,8 @@
 //! Always invoked from shop-root `COMPOSE_DIR`:
 //! `docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p <shop-id>-<env>`
 //!
-//! `-p` pins the VPS project name so `.env` `COMPOSE_PROJECT_NAME` (local
-//! `shopware-cli project dev`) cannot collide live/staging on one host.
+//! `-p` pins `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` so leftover
+//! `COMPOSE_PROJECT_NAME` in committed `.env` cannot collapse live/staging.
 //!
 //! Never builds images. `compose up` uses `--no-build`. `compose run` uses
 //! `--pull never` (Compose v5 dropped `--no-build` on `run`).
@@ -142,9 +142,8 @@ mod tests {
     }
 
     #[test]
-    fn vps_argv_pins_derived_name_not_local_compose_project_name() {
+    fn vps_argv_pins_identity_name() {
         let a = vps_compose_argv("acme-live");
         assert!(a.windows(2).any(|w| w == ["-p", "acme-live"]), "{a:?}");
-        assert!(!a.iter().any(|s| s.contains("shopware-")));
     }
 }

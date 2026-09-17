@@ -158,8 +158,8 @@ pub fn client_image_for_url(scheme: &str, _env: &ShopEnv) -> String {
 
 /// `docker compose --env-file .env -f …` plus `-p <project>` when set.
 ///
-/// `-p` is Compose's highest-precedence project name and wins over
-/// `COMPOSE_PROJECT_NAME` in `.env` (that key is for local project-dev).
+/// `-p` is Compose's highest-precedence project name and wins over leftover
+/// `COMPOSE_PROJECT_NAME` in `.env`.
 pub fn compose_argv(files: &[String], project: Option<&str>) -> Vec<String> {
     let mut a = vec!["compose".into(), "--env-file".into(), ".env".into()];
     for f in files {

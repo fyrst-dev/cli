@@ -304,7 +304,7 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
         .get("SHOPWARE_DEPLOY_ENV")
         .map(str::to_string)
         .ok_or_else(|| {
-            Error::fail("Set SHOPWARE_DEPLOY_ENV in .env (live|staging|playground|dev)")
+            Error::fail("Set SHOPWARE_DEPLOY_ENV in .env.local (live|staging|playground|dev)")
         })?;
 
     let compose_project_name = vps_project_name(&shop_id, &deploy_env);
@@ -334,11 +334,11 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
     if let Some(from_env) = env.get("COMPOSE_PROJECT_NAME") {
         if from_env != compose_project_name {
             notes.push(format!(
-                "COMPOSE_PROJECT_NAME={from_env} is for local shopware-cli project dev; VPS compose uses -p {compose_project_name}"
+                "COMPOSE_PROJECT_NAME={from_env} in env files is ignored; compose uses -p {compose_project_name}"
             ));
         }
     } else {
-        notes.push(format!("VPS compose project -p {compose_project_name}"));
+        notes.push(format!("compose project -p {compose_project_name}"));
     }
     if data_root_derived {
         notes.push(format!("SHOPWARE_DATA_ROOT unset; derived {data_root}"));
@@ -693,6 +693,10 @@ DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
             .notes
             .iter()
             .any(|n| n.contains("COMPOSE_PROJECT_NAME=shopware-acme")));
+        assert!(ctx
+            .notes
+            .iter()
+            .any(|n| n.contains("ignored; compose uses -p acme-staging")));
         assert!(!ctx.warnings.iter().any(|w| w.contains("remove or comment")));
         let plan = ctx.plan();
         assert!(plan.pull.is_none());

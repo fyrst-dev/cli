@@ -113,8 +113,9 @@ Compose is always:
 docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p <SHOPWARE_SHOP_ID>-<SHOPWARE_DEPLOY_ENV>
 ```
 
-`-p` wins over `.env` `COMPOSE_PROJECT_NAME` (that key is for local
-`shopware-cli project dev` only). VPS stacks stay `<shop-id>-<env>`.
+`-p` pins `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` from loaded identity
+(`.env` shop id + `.env.local` / `.env.prod` deploy env). Leftover
+`COMPOSE_PROJECT_NAME` in committed `.env` is ignored.
 
 Never `--build`. `compose run` uses `--pull never` (not `--no-build`). `compose up`
 uses `--no-build` (and `--pull never` when skipping registry pull). Theme/asset
@@ -165,32 +166,34 @@ volumes (`media`, `files`, `thumbnail`, `theme`, `sitemap`) restore from
 
 ## `shopware env init` (implemented)
 
-Finish shop-root `.env` after `shopware-cli project create` + Flex. Historically
-mapped to overlay `deploy/init-env.sh` (removed). Does **not** overwrite the
-whole file, invent `MYSQL_*` passwords, set `APP_URL`, or generate
-`APP_SECRET` (`shopware-cli project create` writes that). This is **not** a
-dump command.
+Finish committed shop-root `.env` after `shopware-cli project create` + Flex,
+and host `.env.local` for `SHOPWARE_DEPLOY_ENV`. Historically mapped to overlay
+`deploy/init-env.sh` (removed). Does **not** overwrite the whole file, invent
+`MYSQL_*` passwords, set `APP_URL`, or generate `APP_SECRET`
+(`shopware-cli project create` writes that). Shared `.env` must not hold
+env-specific values. This is **not** a dump command.
 
 Resolves shop root (`COMPOSE_DIR` if set, else walk from cwd for `.env` or
 `.env.example` + `deploy/`). `.env` is `KEY=VALUE` (quotes stripped, **no
 shell expansion**), same parser as import (`src/shopware/envfile.rs`).
 
 1. Copy `.env.example` → `.env` when `.env` is missing; merge **missing** keys
-   from `.env.example` without clobbering existing values.
+   from `.env.example` without clobbering existing values (skips
+   `COMPOSE_PROJECT_NAME` and `SHOPWARE_DEPLOY_ENV`).
 2. `--shop-id` is required unless `SHOPWARE_SHOP_ID` is already non-empty in
    `.env`. Slug: lowercase `[a-z0-9]([a-z0-9-]*[a-z0-9])?`.
-3. `--env` is `live` | `staging` | `playground` | `dev`. Default `live` when
-   unset/empty; keep an existing non-empty value.
+3. `--env` is `live` | `staging` | `playground` | `dev`. Written to
+   **`.env.local`** (gitignored; created if missing). Default `live` when
+   unset and `.env.local` / `.env.prod` have no value; leftover uncommented
+   `SHOPWARE_DEPLOY_ENV` in shared `.env` is migrated then commented out.
 4. `--image` sets `IMAGE` (no whitespace). Unset leaves `IMAGE` as-is.
-5. Sets `COMPOSE_PROJECT_NAME=shopware-<shop-id>` for **local**
-   `shopware-cli project dev` / root `compose.yaml` (create writes
-   `COMPOSE_PROJECT_NAME=sw-…`). Pattern is exactly `shopware-<shop-id>` —
-   no `SHOPWARE_DEPLOY_ENV` suffix. This does **not** rename VPS stacks.
-   VPS compose pins `-p <shop-id>-<env>` so live and staging stay distinct
-   on one host. If the file only has a commented `# COMPOSE_PROJECT_NAME=…`
-   line, an uncommented assignment is appended.
-6. `--dry-run` prints the summary and does not write `.env`.
-7. After a real write: `chmod 600 .env`.
+5. **Comments out** uncommented `COMPOSE_PROJECT_NAME=…` in shared `.env`
+   (create writes `COMPOSE_PROJECT_NAME=sw-…`). Does **not** set
+   `COMPOSE_PROJECT_NAME` to `shopware-…` or `<shop-id>-<env>`. VPS compose
+   derives `<shop-id>-<env>` from identity and pins `-p`. Already-commented
+   lines are left as-is.
+6. `--dry-run` prints the summary and does not write `.env` or `.env.local`.
+7. After a real write: `chmod 600 .env` and `.env.local`.
 
 Does not generate `APP_SECRET` (no dedicated read/write of that key). Refuses a
 bash xtrace equivalent (`SHELLOPTS=xtrace` / `BASH_XTRACEFD`) so credentials
@@ -358,8 +361,8 @@ Local: rsync (or a tree copy if rsync is missing) from
 `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/<item>`
 into `--snapshot-dir/data/<item>/`. If the bind-mount directory is missing,
 named-volume fallback `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}_<item>` via
-`alpine:3.20` writes `--snapshot-dir/volumes/<item>.tar.gz` (VPS project
-name, not local `COMPOSE_PROJECT_NAME`).
+`alpine:3.20` writes `--snapshot-dir/volumes/<item>.tar.gz` (identity
+project name, matching `docker compose -p`).
 
 Remote `--from <alias>`: SSH + rsync (or tar over SSH) from
 `SHOPWARE_REMOTE_DATA_ROOT` or derived
@@ -499,8 +502,8 @@ shopware-cli.
    `$SHOPWARE_DATA_ROOT/<item>/` (or derived
    `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV`) into
    `data/<item>/`. Missing bind-mounts fall back to a named-volume tar
-   (`{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}_<item>`, `alpine:3.20`; not
-   local `COMPOSE_PROJECT_NAME`). Local target writes the
+   (`{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}_<item>`, `alpine:3.20`;
+   identity name matching `docker compose -p`). Local target writes the
    timestamped dir in place; SSH target builds under
    `<shop>/var/backup-work/<stamp>` then rsyncs (`SHOPWARE_SSH_KEY`).
 4. If `--data` includes `db`: **do not dump**. `--dry-run` prints
@@ -564,7 +567,7 @@ This CLI reads shop identity and secrets from the environment / shop-root
 
 | Area | Variables |
 | --- | --- |
-| Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`, `COMPOSE_PROJECT_NAME` |
+| Shop identity | `COMPOSE_DIR`, `SHOPWARE_SHOP_ID` (shared `.env`), `SHOPWARE_DEPLOY_ENV` (`.env.local` / `.env.prod`), `SHOPWARE_DATA_BASE`, `SHOPWARE_DATA_ROOT`. Do not put `COMPOSE_PROJECT_NAME` or `SHOPWARE_DEPLOY_ENV` in committed `.env`; VPS compose uses `-p <shop-id>-<env>`. |
 | Env init | `IMAGE` (`APP_SECRET` is Shopware's; `shopware-cli project create` writes it) |
 | Import | `MYSQL_DATABASE`, `DATABASE_URL`, `SHOPWARE_ALLOW_LIVE_RESTORE` |
 | Restore volumes | `SHOPWARE_DATA_ROOT`, `SHOPWARE_DATA_BASE` |

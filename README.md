@@ -151,14 +151,18 @@ Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, optional
 
 ### env init
 
-Does not overwrite the whole `.env`. Does not invent MYSQL passwords or
-`APP_URL`. Does not generate `APP_SECRET` (`shopware-cli project create`
-already writes it). `--shop-id` is required unless `SHOPWARE_SHOP_ID` is
-already set. `--env` defaults to `live`. Sets
-`COMPOSE_PROJECT_NAME=shopware-<shop-id>` for **local** `shopware-cli project
-dev` / root `compose.yaml` (create writes `COMPOSE_PROJECT_NAME=sw-…`; no
-env suffix). VPS stacks stay `<shop-id>-<env>` (`docker compose -p`). `.env`
-may still be missing; missing keys are merged from `.env.example`.
+Shop-root `.env` is git-committed and shared. This command does not
+overwrite the whole file, invent MYSQL passwords or `APP_URL`, or generate
+`APP_SECRET` (`shopware-cli project create` already writes it). `--shop-id`
+is required unless `SHOPWARE_SHOP_ID` is already set. `--env` writes
+`SHOPWARE_DEPLOY_ENV` to **`.env.local`** (gitignored; created if missing;
+default `live` when unset and no host value). Uncommented
+`COMPOSE_PROJECT_NAME` (create writes `sw-…`) and leftover
+`SHOPWARE_DEPLOY_ENV` in shared `.env` are **commented out**. Compose
+project name is `<shop-id>-<env>` from identity, pinned with
+`docker compose -p` on VPS. `.env` may still be missing; missing keys are
+merged from `.env.example` (not `COMPOSE_PROJECT_NAME` /
+`SHOPWARE_DEPLOY_ENV`).
 
 ```bash
 fyrst-cli shopware env init --shop-id acme --dry-run

@@ -200,8 +200,8 @@ pub fn resolve_remote_project_name(
     shop_id: &str,
 ) -> Result<String, Error> {
     let _ = require_shop_id(env);
-    // Remote VPS stacks are `{shop_id}-live`. COMPOSE_PROJECT_NAME is local
-    // `shopware-cli project dev` only and must not name the live project.
+    // Remote live stacks are `{shop_id}-live` from identity. Do not use
+    // leftover `COMPOSE_PROJECT_NAME` from committed `.env`.
     Ok(format!("{shop_id}-live"))
 }
 

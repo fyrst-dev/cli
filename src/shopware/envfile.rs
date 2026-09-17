@@ -47,6 +47,15 @@ pub fn has_key(contents: &str, key: &str) -> bool {
 pub const MERGE_FROM_EXAMPLE_HEADER: &str =
     "# --- missing keys merged from .env.example by deploy/init-env.sh ---";
 
+/// Keys that must not be copied from `.env.example` into committed `.env`.
+const SKIP_MERGE_INTO_SHARED_ENV: &[&str] = &["COMPOSE_PROJECT_NAME", "SHOPWARE_DEPLOY_ENV"];
+
+pub const COMPOSE_PROJECT_NAME_COMMENT_SUFFIX: &str =
+    " # commented by fyrst-cli shopware env init (Compose project is ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV} via docker compose -p)";
+
+pub const SHOPWARE_DEPLOY_ENV_COMMENT_SUFFIX: &str =
+    " # commented by fyrst-cli shopware env init (host-specific; set in .env.local)";
+
 /// Replace every uncommented `KEY=` line, or append `KEY=value`.
 /// Preserves an `export` prefix. Does not quote `value` (overlay `env_set_key`).
 pub fn set_key(contents: &str, key: &str, value: &str) -> String {
@@ -80,7 +89,45 @@ pub fn set_key(contents: &str, key: &str, value: &str) -> String {
     out
 }
 
+/// Comment uncommented `KEY=` lines. Returns the rewritten file and how many
+/// lines were commented. Already-commented lines are left as-is.
+pub fn comment_uncommented_key(contents: &str, key: &str, suffix: &str) -> (String, usize) {
+    let mut out = String::new();
+    let mut n = 0;
+    for line in contents.lines() {
+        let line = trim_cr(line);
+        if uncommented_assignment(line, key).is_some() {
+            out.push_str("# ");
+            out.push_str(line);
+            out.push_str(suffix);
+            out.push('\n');
+            n += 1;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    (out, n)
+}
+
+pub fn comment_compose_project_name(contents: &str) -> (String, usize) {
+    comment_uncommented_key(
+        contents,
+        "COMPOSE_PROJECT_NAME",
+        COMPOSE_PROJECT_NAME_COMMENT_SUFFIX,
+    )
+}
+
+pub fn comment_deploy_env(contents: &str) -> (String, usize) {
+    comment_uncommented_key(
+        contents,
+        "SHOPWARE_DEPLOY_ENV",
+        SHOPWARE_DEPLOY_ENV_COMMENT_SUFFIX,
+    )
+}
+
 /// Append assignment lines from `.env.example` whose keys are missing in dest.
+/// Skips `COMPOSE_PROJECT_NAME` and `SHOPWARE_DEPLOY_ENV` (not for shared `.env`).
 pub fn merge_missing_from_example(example: &str, dest: &mut String) -> Vec<String> {
     let mut added = Vec::new();
     let mut header = false;
@@ -92,6 +139,9 @@ pub fn merge_missing_from_example(example: &str, dest: &mut String) -> Vec<Strin
         let Some(key) = uncommented_key(line) else {
             continue;
         };
+        if SKIP_MERGE_INTO_SHARED_ENV.contains(&key) {
+            continue;
+        }
         if has_key(dest, key) {
             continue;
         }
@@ -294,35 +344,51 @@ MYSQL_PASSWORD=pa$$word
     }
 
     #[test]
-    fn set_key_rewrites_uncommented_compose_project_name_and_appends_if_only_commented() {
+    fn comment_uncommented_compose_project_name_skips_already_commented() {
         let src = "\
 COMPOSE_PROJECT_NAME=sw-shop-acme
 export COMPOSE_PROJECT_NAME=other
 # COMPOSE_PROJECT_NAME=keep-commented
 MYSQL_PASSWORD=s3cret
 ";
-        let out = set_key(src, "COMPOSE_PROJECT_NAME", "shopware-acme");
-        assert_eq!(last_value(&out, "COMPOSE_PROJECT_NAME"), "shopware-acme");
-        assert!(out.contains("COMPOSE_PROJECT_NAME=shopware-acme"));
-        assert!(out.contains("export COMPOSE_PROJECT_NAME=shopware-acme"));
-        assert!(!out.contains("COMPOSE_PROJECT_NAME=sw-shop-acme"));
-        assert!(!out.contains("COMPOSE_PROJECT_NAME=other"));
+        let (out, n) = comment_compose_project_name(src);
+        assert_eq!(n, 2);
+        assert!(!has_key(&out, "COMPOSE_PROJECT_NAME"));
+        assert!(!out
+            .lines()
+            .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
+        assert!(out.contains(
+            "# COMPOSE_PROJECT_NAME=sw-shop-acme # commented by fyrst-cli shopware env init"
+        ));
+        assert!(out.contains(
+            "# export COMPOSE_PROJECT_NAME=other # commented by fyrst-cli shopware env init"
+        ));
         assert!(out.contains("# COMPOSE_PROJECT_NAME=keep-commented"));
         assert!(out.contains("MYSQL_PASSWORD=s3cret"));
 
-        let commented_only = "\
-# COMPOSE_PROJECT_NAME=sw-shop-acme
-MYSQL_PASSWORD=s3cret
+        let (again, n2) = comment_compose_project_name(&out);
+        assert_eq!(n2, 0);
+        assert_eq!(again, out);
+    }
+
+    #[test]
+    fn comment_uncommented_deploy_env_leaves_commented_lines() {
+        let src = "\
+SHOPWARE_DEPLOY_ENV=staging
+export SHOPWARE_DEPLOY_ENV=live
+# SHOPWARE_DEPLOY_ENV=dev
+SHOPWARE_SHOP_ID=acme
 ";
-        let appended = set_key(commented_only, "COMPOSE_PROJECT_NAME", "shopware-acme");
-        assert!(appended.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme"));
-        assert!(appended.lines().any(|l| l
-            .trim_start()
-            .starts_with("COMPOSE_PROJECT_NAME=shopware-acme")));
-        assert_eq!(
-            last_value(&appended, "COMPOSE_PROJECT_NAME"),
-            "shopware-acme"
-        );
+        let (out, n) = comment_deploy_env(src);
+        assert_eq!(n, 2);
+        assert!(!has_key(&out, "SHOPWARE_DEPLOY_ENV"));
+        assert!(out
+            .contains("# SHOPWARE_DEPLOY_ENV=staging # commented by fyrst-cli shopware env init"));
+        assert!(out.contains(
+            "# export SHOPWARE_DEPLOY_ENV=live # commented by fyrst-cli shopware env init"
+        ));
+        assert!(out.contains("# SHOPWARE_DEPLOY_ENV=dev"));
+        assert_eq!(last_value(&out, "SHOPWARE_SHOP_ID"), "acme");
     }
 
     #[test]
@@ -347,5 +413,21 @@ MYSQL_PASSWORD=keep-me
         assert!(dest.contains("APP_URL=http://localhost"));
         assert!(dest.contains("IMAGE=from-example"));
         assert_eq!(last_value(&dest, "SHOPWARE_SHOP_ID"), "");
+    }
+
+    #[test]
+    fn merge_missing_skips_compose_project_name_and_deploy_env() {
+        let example = "\
+SHOPWARE_SHOP_ID=
+COMPOSE_PROJECT_NAME=sw-shop-acme
+SHOPWARE_DEPLOY_ENV=live
+APP_URL=http://localhost
+";
+        let mut dest = "SHOPWARE_SHOP_ID=\n".to_string();
+        let added = merge_missing_from_example(example, &mut dest);
+        assert_eq!(added, vec!["APP_URL"]);
+        assert!(!has_key(&dest, "COMPOSE_PROJECT_NAME"));
+        assert!(!has_key(&dest, "SHOPWARE_DEPLOY_ENV"));
+        assert!(dest.contains("APP_URL=http://localhost"));
     }
 }

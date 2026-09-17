@@ -3,8 +3,10 @@
 //! One loader for every shopware verb: process env is the base, then
 //! `.env`, `.env.local` (if present), `.env.prod` (if present). Later files
 //! win except identity / process-win keys, which a non-empty process value
-//! still owns. Leftover `SYNC_*` / `BACKUP_SSH_*` / `BACKUP_ALLOW_*` names
-//! fail when the replacement is unset.
+//! still owns. Empty `SHOPWARE_DEPLOY_ENV=` in a file is ignored so a host
+//! file (`.env.local` / `.env.prod`) can own the value over an empty leftover
+//! in committed `.env`. Leftover `SYNC_*` / `BACKUP_SSH_*` / `BACKUP_ALLOW_*`
+//! names fail when the replacement is unset.
 
 use super::envfile::parse_env_file;
 use super::error::Error;
@@ -89,6 +91,10 @@ impl ShopEnv {
                 let contents = fs::read_to_string(&path)
                     .map_err(|e| Error::fail(format!("cannot read {}: {e}", path.display())))?;
                 for (k, v) in parse_env_file(&contents) {
+                    if k == "SHOPWARE_DEPLOY_ENV" && v.is_empty() {
+                        // Empty leftover in shared `.env` must not hide a host file.
+                        continue;
+                    }
                     vars.insert(k, v);
                 }
             }
@@ -293,7 +299,7 @@ pub fn require_deploy_env(env: &ShopEnv) -> Result<String, Error> {
         .map(str::to_string)
         .ok_or_else(|| {
             Error::fail(
-                "SHOPWARE_DEPLOY_ENV is required (live|staging|playground|dev). Set it in shop-root .env.",
+                "SHOPWARE_DEPLOY_ENV is required (live|staging|playground|dev). Set it in .env.local (host-specific; not committed shared .env).",
             )
         })
 }
@@ -310,15 +316,15 @@ pub fn allow_live_restore(env: &ShopEnv) -> bool {
     env_truthy(env.get("SHOPWARE_ALLOW_LIVE_RESTORE"))
 }
 
-/// VPS Compose project `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}`.
+/// Compose project `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}`.
 ///
-/// `COMPOSE_PROJECT_NAME` is for local `shopware-cli project dev` / root
-/// `compose.yaml` only and must not name VPS stacks.
+/// Derived at runtime from loaded identity. Do not store this (or
+/// `COMPOSE_PROJECT_NAME`) in committed `.env`; VPS compose pins `-p`.
 pub fn vps_project_name(shop_id: &str, deploy_env: &str) -> String {
     format!("{shop_id}-{deploy_env}")
 }
 
-/// Derived VPS project name when shop id and deploy env are both set.
+/// Derived project name when shop id and deploy env are both set.
 pub fn vps_project_name_opt(env: &ShopEnv) -> Option<String> {
     match (env.get("SHOPWARE_SHOP_ID"), env.get("SHOPWARE_DEPLOY_ENV")) {
         (Some(id), Some(deploy_env)) if !id.is_empty() && !deploy_env.is_empty() => {
@@ -330,9 +336,9 @@ pub fn vps_project_name_opt(env: &ShopEnv) -> Option<String> {
 
 /// `(project_name, derived_from_shop_id_and_env)`.
 ///
-/// Prefers `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` so VPS named-volume
-/// fallback matches `docker compose -p`. `COMPOSE_PROJECT_NAME` is used only
-/// when shop id / deploy env are missing (local project-dev).
+/// Prefers `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` so named-volume fallback
+/// matches `docker compose -p`. `COMPOSE_PROJECT_NAME` is a last-resort
+/// fallback when shop id / deploy env are missing.
 pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
     if let Some(n) = vps_project_name_opt(env) {
         return Ok((n, true));
@@ -341,7 +347,7 @@ pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
         return Ok((n.to_string(), false));
     }
     Err(Error::fail(
-        "Set SHOPWARE_SHOP_ID and SHOPWARE_DEPLOY_ENV to derive ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV} for VPS Compose. COMPOSE_PROJECT_NAME is for local shopware-cli project dev only.",
+        "Set SHOPWARE_SHOP_ID in shared .env and SHOPWARE_DEPLOY_ENV in .env.local to derive ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV} for Compose (-p).",
     ))
 }
 
@@ -738,9 +744,9 @@ COMPOSE_PROFILES=redis
     }
 
     #[test]
-    fn compose_project_name_does_not_override_vps_name() {
+    fn compose_project_name_does_not_override_identity_name() {
         let mut vars = HashMap::new();
-        vars.insert("COMPOSE_PROJECT_NAME".into(), "shopware-acme".into());
+        vars.insert("COMPOSE_PROJECT_NAME".into(), "sw-shop-acme".into());
         vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
         vars.insert("SHOPWARE_DEPLOY_ENV".into(), "live".into());
         let env = ShopEnv::from_vars(PathBuf::from("/tmp/x"), vars);
@@ -754,13 +760,67 @@ COMPOSE_PROFILES=redis
     #[test]
     fn compose_project_name_fallback_without_shop_identity() {
         let mut vars = HashMap::new();
-        vars.insert("COMPOSE_PROJECT_NAME".into(), "shopware-acme".into());
+        vars.insert("COMPOSE_PROJECT_NAME".into(), "sw-shop-acme".into());
         let env = ShopEnv::from_vars(PathBuf::from("/tmp/x"), vars);
         assert_eq!(
             derive_project_name(&env).unwrap(),
-            ("shopware-acme".into(), false)
+            ("sw-shop-acme".into(), false)
         );
         assert_eq!(vps_project_name_opt(&env), None);
+    }
+
+    #[test]
+    fn deploy_env_from_local_wins_over_shared_env() {
+        let shop = temp_shop("deploy-env-local-wins");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=live\n",
+        )
+        .unwrap();
+        fs::write(shop.join(".env.local"), "SHOPWARE_DEPLOY_ENV=staging\n").unwrap();
+        let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
+        assert_eq!(env.get("SHOPWARE_SHOP_ID"), Some("acme"));
+        assert_eq!(env.get("SHOPWARE_DEPLOY_ENV"), Some("staging"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn empty_shared_deploy_env_does_not_hide_host_file() {
+        let shop = temp_shop("deploy-env-empty-shared");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=\n",
+        )
+        .unwrap();
+        fs::write(shop.join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+        let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
+        assert_eq!(env.get("SHOPWARE_DEPLOY_ENV"), Some("dev"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn empty_local_deploy_env_does_not_wipe_shared_leftover() {
+        let shop = temp_shop("deploy-env-empty-local");
+        fs::write(
+            shop.join(".env"),
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=live\n",
+        )
+        .unwrap();
+        fs::write(shop.join(".env.local"), "SHOPWARE_DEPLOY_ENV=\n").unwrap();
+        let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
+        assert_eq!(env.get("SHOPWARE_DEPLOY_ENV"), Some("live"));
+        let _ = fs::remove_dir_all(&shop);
+    }
+
+    #[test]
+    fn deploy_env_from_prod_wins_over_local() {
+        let shop = temp_shop("deploy-env-prod-wins");
+        fs::write(shop.join(".env"), "SHOPWARE_SHOP_ID=acme\n").unwrap();
+        fs::write(shop.join(".env.local"), "SHOPWARE_DEPLOY_ENV=dev\n").unwrap();
+        fs::write(shop.join(".env.prod"), "SHOPWARE_DEPLOY_ENV=live\n").unwrap();
+        let env = ShopEnv::load(shop.clone(), &HashMap::new()).unwrap();
+        assert_eq!(env.get("SHOPWARE_DEPLOY_ENV"), Some("live"));
+        let _ = fs::remove_dir_all(&shop);
     }
 
     #[test]

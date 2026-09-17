@@ -111,10 +111,19 @@ fn init_env_help_lists_flags() {
         "--dry-run",
         "COMPOSE_DIR",
         "COMPOSE_PROJECT_NAME",
-        "COMPOSE_PROJECT_NAME=shopware-",
+        ".env.local",
+        "SHOPWARE_DEPLOY_ENV",
     ] {
         assert!(help.contains(needle), "missing {needle} in:\n{help}");
     }
+    assert!(
+        !help.contains("COMPOSE_PROJECT_NAME=shopware-"),
+        "env init --help must not set COMPOSE_PROJECT_NAME=shopware-…:\n{help}"
+    );
+    assert!(
+        help.contains("comments out") || help.contains("commented"),
+        "env init --help should describe commenting COMPOSE_PROJECT_NAME:\n{help}"
+    );
     assert!(
         !help.contains("--vps"),
         "env init --help must not list --vps:\n{help}"
@@ -122,10 +131,6 @@ fn init_env_help_lists_flags() {
     assert!(
         !help.contains("--strip"),
         "env init --help must not list --strip:\n{help}"
-    );
-    assert!(
-        !help.contains("always comments"),
-        "env init --help must not describe commenting COMPOSE_PROJECT_NAME:\n{help}"
     );
     assert!(
         !help.contains("generate-app-secret"),
@@ -174,13 +179,17 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
     let log = stdout(&out);
     assert!(log.contains("DRY-RUN (no write)"), "{log}");
     assert!(log.contains("set SHOPWARE_SHOP_ID=acme"), "{log}");
-    assert!(log.contains("set SHOPWARE_DEPLOY_ENV=live"), "{log}");
-    assert!(log.contains("set IMAGE=ghcr.io/example/acme"), "{log}");
     assert!(
-        log.contains("set COMPOSE_PROJECT_NAME=shopware-acme"),
+        log.contains("set SHOPWARE_DEPLOY_ENV=live in .env.local"),
         "{log}"
     );
-    assert!(!log.contains("shopware-acme-live"), "{log}");
+    assert!(log.contains("set IMAGE=ghcr.io/example/acme"), "{log}");
+    assert!(
+        log.contains("commented ") && log.contains("COMPOSE_PROJECT_NAME"),
+        "{log}"
+    );
+    assert!(log.contains("create .env.local"), "{log}");
+    assert!(!log.contains("set COMPOSE_PROJECT_NAME="), "{log}");
     assert!(!log.contains("--vps"), "{log}");
     assert!(!log.contains("generate-app-secret"), "{log}");
     assert!(!log.contains("set APP_SECRET"), "{log}");
@@ -192,10 +201,11 @@ COMPOSE_PROJECT_NAME=sw-shop-acme
     assert_no_secrets(&out, &[]);
     let after = fs::read_to_string(shop.path().join(".env")).unwrap();
     assert_eq!(after, original, "dry-run wrote .env");
+    assert!(!shop.path().join(".env.local").is_file());
 }
 
 #[test]
-fn write_merges_example_sets_compose_project_name_and_chmod() {
+fn write_merges_example_comments_shared_keys_writes_local_and_chmod() {
     let shop = TempShop::new("write");
     fs::write(
         shop.path().join(".env"),
@@ -205,6 +215,7 @@ SHOPWARE_SHOP_ID=
 MYSQL_PASSWORD={MYSQL_PASS}
 APP_URL=
 COMPOSE_PROJECT_NAME=sw-shop-acme
+SHOPWARE_DEPLOY_ENV=live
 "
         ),
     )
@@ -216,6 +227,8 @@ SHOPWARE_SHOP_ID=
 MYSQL_PASSWORD=from-example
 APP_URL=http://localhost
 NEW_FROM_EXAMPLE=1
+COMPOSE_PROJECT_NAME=from-example
+SHOPWARE_DEPLOY_ENV=from-example
 ",
     )
     .unwrap();
@@ -230,36 +243,56 @@ NEW_FROM_EXAMPLE=1
     let log = stdout(&out);
     assert!(log.contains("Updated "), "{log}");
     assert!(log.contains("chmod 600 .env"), "{log}");
+    assert!(log.contains("chmod 600 .env.local"), "{log}");
     assert!(
         log.contains("merge missing keys from .env.example: NEW_FROM_EXAMPLE"),
         "{log}"
     );
     assert!(log.contains("set SHOPWARE_SHOP_ID=acme"), "{log}");
-    assert!(log.contains("set SHOPWARE_DEPLOY_ENV=staging"), "{log}");
     assert!(
-        log.contains("set COMPOSE_PROJECT_NAME=shopware-acme"),
+        log.contains("set SHOPWARE_DEPLOY_ENV=staging in .env.local"),
         "{log}"
     );
-    assert!(!log.contains("shopware-acme-staging"), "{log}");
+    assert!(
+        log.contains("commented ") && log.contains("COMPOSE_PROJECT_NAME"),
+        "{log}"
+    );
+    assert!(!log.contains("set COMPOSE_PROJECT_NAME="), "{log}");
     assert!(!log.contains("--vps"), "{log}");
     assert_no_secrets(&out, &["from-example"]);
 
     let env = fs::read_to_string(shop.path().join(".env")).unwrap();
     assert!(env.contains("SHOPWARE_SHOP_ID=acme"));
-    assert!(env.contains("SHOPWARE_DEPLOY_ENV=staging"));
+    assert!(!env
+        .lines()
+        .any(|l| l.trim_start().starts_with("SHOPWARE_DEPLOY_ENV=")));
+    assert!(env.contains("# SHOPWARE_DEPLOY_ENV=live"));
     assert!(env.contains(&format!("MYSQL_PASSWORD={MYSQL_PASS}")));
     assert!(!env.contains("MYSQL_PASSWORD=from-example"));
     assert!(env.contains("NEW_FROM_EXAMPLE=1"));
-    assert!(env.contains("COMPOSE_PROJECT_NAME=shopware-acme"));
-    assert!(!env.contains("COMPOSE_PROJECT_NAME=sw-shop-acme"));
-    assert!(!env.contains("shopware-acme-staging"));
+    assert!(env.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme"));
+    assert!(!env
+        .lines()
+        .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
+    assert!(!env.contains("COMPOSE_PROJECT_NAME=shopware-"));
     assert!(!env.contains("--vps"));
+    let local = fs::read_to_string(shop.path().join(".env.local")).unwrap();
+    assert!(local.contains("SHOPWARE_DEPLOY_ENV=staging"));
     let mode = fs::metadata(shop.path().join(".env"))
         .unwrap()
         .permissions()
         .mode()
         & 0o777;
     assert_eq!(mode, 0o600, "expected chmod 600, got {mode:o}");
+    let local_mode = fs::metadata(shop.path().join(".env.local"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        local_mode, 0o600,
+        "expected chmod 600 .env.local, got {local_mode:o}"
+    );
 }
 
 #[test]
@@ -338,41 +371,45 @@ fn vps_flag_is_rejected() {
 }
 
 #[test]
-fn commented_only_compose_project_name_appends_uncommented() {
+fn already_commented_compose_project_name_stays_commented() {
     let shop = TempShop::new("commented-cpn");
     fs::write(
         shop.path().join(".env"),
         "\
 SHOPWARE_SHOP_ID=acme
-SHOPWARE_DEPLOY_ENV=live
 # COMPOSE_PROJECT_NAME=sw-shop-acme
 ",
     )
     .unwrap();
+    fs::write(shop.path().join(".env.local"), "SHOPWARE_DEPLOY_ENV=live\n").unwrap();
     let out = init_env(shop.path(), &[]);
     assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
     let log = stdout(&out);
     assert!(
-        log.contains("set COMPOSE_PROJECT_NAME=shopware-acme"),
+        log.contains("no uncommented COMPOSE_PROJECT_NAME=… in shared .env"),
         "{log}"
     );
-    assert!(!log.contains("already set COMPOSE_PROJECT_NAME"), "{log}");
+    assert!(
+        log.contains("already set SHOPWARE_DEPLOY_ENV=live in .env.local"),
+        "{log}"
+    );
+    assert!(!log.contains("set COMPOSE_PROJECT_NAME="), "{log}");
     assert!(!log.contains("--vps"), "{log}");
+    assert!(log.contains("no changes (already up to date)"), "{log}");
     let env = fs::read_to_string(shop.path().join(".env")).unwrap();
     assert!(env.contains("# COMPOSE_PROJECT_NAME=sw-shop-acme"));
-    assert!(env
+    assert!(!env
         .lines()
-        .any(|l| l.trim_start() == "COMPOSE_PROJECT_NAME=shopware-acme"));
+        .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
 }
 
 #[test]
-fn already_set_compose_project_name_is_idempotent() {
-    let shop = TempShop::new("already-cpn");
+fn leftover_compose_project_name_is_commented() {
+    let shop = TempShop::new("leftover-cpn");
     fs::write(
         shop.path().join(".env"),
         "\
 SHOPWARE_SHOP_ID=acme
-SHOPWARE_DEPLOY_ENV=live
 COMPOSE_PROJECT_NAME=shopware-acme
 ",
     )
@@ -381,20 +418,18 @@ COMPOSE_PROJECT_NAME=shopware-acme
     assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
     let log = stdout(&out);
     assert!(
-        log.contains("already set COMPOSE_PROJECT_NAME=shopware-acme"),
+        log.contains("commented ") && log.contains("COMPOSE_PROJECT_NAME"),
         "{log}"
     );
-    assert!(!log.contains("  set COMPOSE_PROJECT_NAME="), "{log}");
-    assert!(log.contains("no changes (already up to date)"), "{log}");
-    assert!(!log.contains("--vps"), "{log}");
+    assert!(!log.contains("set COMPOSE_PROJECT_NAME="), "{log}");
+    assert!(!log.contains("no changes (already up to date)"), "{log}");
     let env = fs::read_to_string(shop.path().join(".env")).unwrap();
-    assert!(env.contains("COMPOSE_PROJECT_NAME=shopware-acme"));
-    assert_eq!(
-        env.lines()
-            .filter(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME="))
-            .count(),
-        1
-    );
+    assert!(env.contains("# COMPOSE_PROJECT_NAME=shopware-acme"));
+    assert!(!env
+        .lines()
+        .any(|l| l.trim_start().starts_with("COMPOSE_PROJECT_NAME=")));
+    let local = fs::read_to_string(shop.path().join(".env.local")).unwrap();
+    assert!(local.contains("SHOPWARE_DEPLOY_ENV=live"));
 }
 
 #[test]
@@ -428,6 +463,7 @@ MYSQL_PASSWORD={MYSQL_PASS}
     assert!(stdout(&out).contains("copy .env.example → .env"));
     assert_no_secrets(&out, &[]);
     assert!(!shop.path().join(".env").is_file());
+    assert!(!shop.path().join(".env.local").is_file());
 }
 
 #[test]
