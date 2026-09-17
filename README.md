@@ -14,7 +14,7 @@ disaster recovery. Do not use sync as a backup.
 
 Linux amd64 (`x86_64-unknown-linux-gnu`) and arm64 (`aarch64-unknown-linux-gnu`)
 binaries are on [GitHub Releases](https://github.com/fyrst-dev/cli/releases).
-Tags look like `0.1.0` (no `v` prefix). macOS and other hosts: build from source.
+Tags look like `0.2.0` (no `v` prefix). macOS and other hosts: build from source.
 
 ### Script (recommended)
 
@@ -30,7 +30,7 @@ is used only when that prefix is not writable.
 curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | PREFIX="$HOME/.local" bash
 
 # pin a release
-curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | FYRST_CLI_VERSION=0.1.0 bash
+curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | FYRST_CLI_VERSION=0.2.0 bash
 ```
 
 ### Manual download
@@ -39,8 +39,8 @@ From [Releases](https://github.com/fyrst-dev/cli/releases), download the tarball
 for your arch and `SHA256SUMS`:
 
 ```bash
-curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/0.1.0/fyrst-cli-x86_64-unknown-linux-gnu.tar.gz
-curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/0.1.0/SHA256SUMS
+curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/0.2.0/fyrst-cli-x86_64-unknown-linux-gnu.tar.gz
+curl -fsSL -O https://github.com/fyrst-dev/cli/releases/download/0.2.0/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
 tar -xzf fyrst-cli-x86_64-unknown-linux-gnu.tar.gz
 sudo install -m 0755 fyrst-cli /usr/local/bin/fyrst-cli

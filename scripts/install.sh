@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/fyrst-dev/cli/main/scripts/install.sh | bash
 #
 # Env:
-#   FYRST_CLI_VERSION  Release tag (e.g. 0.1.0). Default: latest.
+#   FYRST_CLI_VERSION  Release tag (e.g. 0.2.0). Default: latest.
 #                      A leading v is stripped if present.
 #   PREFIX             Install prefix. Default: /usr/local
 #   BINDIR             Binary directory. Default: $PREFIX/bin
@@ -39,7 +39,7 @@ Usage:
   install.sh [VERSION]
   install.sh --help
 
-VERSION may also be set via FYRST_CLI_VERSION (e.g. 0.1.0). Default: latest.
+VERSION may also be set via FYRST_CLI_VERSION (e.g. 0.2.0). Default: latest.
 
 Environment:
   PREFIX      Install prefix (default: /usr/local)
@@ -49,7 +49,7 @@ Environment:
 Examples:
   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash
   PREFIX="\$HOME/.local" bash scripts/install.sh
-  FYRST_CLI_VERSION=0.1.0 bash scripts/install.sh
+  FYRST_CLI_VERSION=0.2.0 bash scripts/install.sh
 EOF
 }
 
