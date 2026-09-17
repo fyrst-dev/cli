@@ -1,7 +1,10 @@
 //! VPS Compose file list and argv (recipes `deploy/lib/compose.sh`).
 //!
 //! Always invoked from shop-root `COMPOSE_DIR`:
-//! `docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml`
+//! `docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p <shop-id>-<env>`
+//!
+//! `-p` pins the VPS project name so `.env` `COMPOSE_PROJECT_NAME` (local
+//! `shopware-cli project dev`) cannot collide live/staging on one host.
 //!
 //! Never builds images. `compose up` uses `--no-build`. `compose run` uses
 //! `--pull never` (Compose v5 dropped `--no-build` on `run`).
@@ -12,14 +15,11 @@ use super::mysql::require_docker;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// The three overlay compose files; all must exist for VPS release/rollback.
-pub fn vps_compose_argv() -> Vec<String> {
-    let mut a = vec!["compose".into(), "--env-file".into(), ".env".into()];
-    for f in COMPOSE_FILES {
-        a.push("-f".into());
-        a.push((*f).to_string());
-    }
-    a
+/// The three overlay compose files plus `-p <project>`; all files must exist
+/// for VPS release/rollback. `project` is `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}`.
+pub fn vps_compose_argv(project: &str) -> Vec<String> {
+    let files: Vec<String> = COMPOSE_FILES.iter().map(|s| (*s).to_string()).collect();
+    super::mysql::compose_argv(&files, Some(project))
 }
 
 pub fn docker_log(compose_args: &[String]) -> String {
@@ -87,8 +87,9 @@ pub fn compose_service_names(
     compose_dir: &Path,
     profile_args: &[String],
     extra_env: &[(String, String)],
+    project: &str,
 ) -> Vec<String> {
-    let mut args = vps_compose_argv();
+    let mut args = vps_compose_argv(project);
     args.extend(profile_args.iter().cloned());
     args.extend(["config".into(), "--services".into()]);
     let mut cmd = Command::new("docker");
@@ -115,7 +116,7 @@ mod tests {
 
     #[test]
     fn vps_argv_is_the_three_overlay_files() {
-        let a = vps_compose_argv();
+        let a = vps_compose_argv("acme-staging");
         assert_eq!(
             a,
             vec![
@@ -128,13 +129,22 @@ mod tests {
                 "deploy/compose.prod.yaml",
                 "-f",
                 "deploy/compose.vps.yaml",
+                "-p",
+                "acme-staging",
             ]
         );
         let log = docker_log(&a);
         assert_eq!(
             log,
-            "docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"
+            "docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p acme-staging"
         );
         assert!(!args_contain_build(&a));
+    }
+
+    #[test]
+    fn vps_argv_pins_derived_name_not_local_compose_project_name() {
+        let a = vps_compose_argv("acme-live");
+        assert!(a.windows(2).any(|w| w == ["-p", "acme-live"]), "{a:?}");
+        assert!(!a.iter().any(|s| s.contains("shopware-")));
     }
 }

@@ -195,19 +195,13 @@ pub fn resolve_remote_data_root(
 }
 
 pub fn resolve_remote_project_name(
-    src: &SshSource,
+    _src: &SshSource,
     env: &ShopEnv,
     shop_id: &str,
 ) -> Result<String, Error> {
-    if src.remote_path.is_some() {
-        let out = remote_bash(src, r#"printf %s "${COMPOSE_PROJECT_NAME:-}""#)?;
-        let n = String::from_utf8_lossy(&out.stdout);
-        let n = n.trim().trim_matches('"').trim();
-        if !n.is_empty() {
-            return Ok(n.to_string());
-        }
-    }
     let _ = require_shop_id(env);
+    // Remote VPS stacks are `{shop_id}-live`. COMPOSE_PROJECT_NAME is local
+    // `shopware-cli project dev` only and must not name the live project.
     Ok(format!("{shop_id}-live"))
 }
 

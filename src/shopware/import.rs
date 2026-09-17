@@ -6,7 +6,7 @@
 
 use super::env::{
     compose_mentions_mysql_service, existing_compose_files, require_shop_id, resolve_compose_dir,
-    ShopEnv,
+    vps_project_name, ShopEnv,
 };
 use super::error::Error;
 use super::live::{assert_not_live, LivePolicy, LiveSignals};
@@ -133,7 +133,7 @@ impl ImportPlan {
             ImportTarget::Bundled { compose_files, .. } => {
                 format!(
                     "{decode} | {} exec -T mysql sh -c '<mysql|mariadb>'",
-                    compose_cli_log(compose_files)
+                    compose_cli_log(compose_files, self.compose_project().as_deref())
                 )
             }
             ImportTarget::External {
@@ -146,6 +146,12 @@ impl ImportPlan {
 
     pub fn log_contains_secret(&self, text: &str) -> bool {
         log_contains_secret(text, &self.secrets)
+    }
+
+    fn compose_project(&self) -> Option<String> {
+        self.deploy_env
+            .as_ref()
+            .map(|e| vps_project_name(&self.shop_id, e))
     }
 }
 
@@ -357,8 +363,9 @@ pub fn execute(plan: &ImportPlan) -> Result<(), Error> {
             compose_dir,
             compose_files,
         } => {
-            compose_up_mysql(compose_dir, compose_files)?;
-            run_bundled(plan, compose_dir, compose_files)?;
+            let project = plan.compose_project();
+            compose_up_mysql(compose_dir, compose_files, project.as_deref())?;
+            run_bundled(plan, compose_dir, compose_files, project.as_deref())?;
         }
         ImportTarget::External { .. } => run_external(plan)?,
     }
@@ -366,8 +373,8 @@ pub fn execute(plan: &ImportPlan) -> Result<(), Error> {
     Ok(())
 }
 
-fn bundled_exec_args(files: &[String]) -> Vec<String> {
-    let mut a = super::mysql::compose_argv(files);
+fn bundled_exec_args(files: &[String], project: Option<&str>) -> Vec<String> {
+    let mut a = super::mysql::compose_argv(files, project);
     a.extend([
         "exec".into(),
         "-T".into(),
@@ -421,8 +428,13 @@ fn external_run_args(target: &ImportTarget) -> Result<Vec<String>, Error> {
     Ok(a)
 }
 
-fn run_bundled(plan: &ImportPlan, compose_dir: &Path, files: &[String]) -> Result<(), Error> {
-    let args = bundled_exec_args(files);
+fn run_bundled(
+    plan: &ImportPlan,
+    compose_dir: &Path,
+    files: &[String],
+    project: Option<&str>,
+) -> Result<(), Error> {
+    let args = bundled_exec_args(files, project);
     pipe_sql_into_docker(plan, &args, Some(compose_dir), None)
 }
 
@@ -570,6 +582,7 @@ mod tests {
             "\
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=staging
+COMPOSE_PROJECT_NAME=shopware-acme
 MYSQL_USER=shop
 MYSQL_PASSWORD=super-secret-pass
 MYSQL_DATABASE=shopware
@@ -593,6 +606,8 @@ MYSQL_DATABASE=shopware
         assert!(log.contains("gzip -dc"), "{log}");
         assert!(log.contains("exec -T mysql"), "{log}");
         assert!(log.contains("-f deploy/compose.yaml"), "{log}");
+        assert!(log.contains("-p acme-staging"), "{log}");
+        assert!(!log.contains("shopware-acme"), "{log}");
         assert!(matches!(plan.target, ImportTarget::Bundled { .. }));
     }
 

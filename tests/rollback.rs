@@ -38,6 +38,7 @@ IMAGE=ghcr.io/example/acme
 IMAGE_TAG=from-env-file
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=staging
+COMPOSE_PROJECT_NAME=shopware-acme
 MYSQL_PASSWORD=super-secret-pass
 DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
 ",
@@ -251,6 +252,8 @@ fn dry_run_prints_same_compose_order_as_release() {
         ),
         "{log}"
     );
+    assert!(log.contains("-p acme-staging"), "{log}");
+    assert!(!log.contains("-p shopware-"), "{log}");
     let setup_idx = log
         .find("--profile setup run --rm --pull never setup")
         .unwrap_or_else(|| panic!("setup missing:\n{log}"));

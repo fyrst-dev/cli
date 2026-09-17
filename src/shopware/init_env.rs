@@ -2,8 +2,9 @@
 //!
 //! Sets fyrst identity (shop id, deploy env, optional IMAGE) and merges
 //! missing keys from `.env.example`. Sets `COMPOSE_PROJECT_NAME=shopware-<shop-id>`
-//! so local `shopware-cli project dev` and Compose share a stable name (create
-//! writes `COMPOSE_PROJECT_NAME=sw-…`; no `SHOPWARE_DEPLOY_ENV` suffix). Does
+//! for local `shopware-cli project dev` / root `compose.yaml` (create writes
+//! `COMPOSE_PROJECT_NAME=sw-…`; no `SHOPWARE_DEPLOY_ENV` suffix). Does not
+//! rename VPS stacks (`<shop-id>-<env>` via `docker compose -p`). Does
 //! not overwrite the whole file, does not invent MYSQL passwords or `APP_URL`,
 //! and does not generate or rewrite `APP_SECRET` (`shopware-cli project
 //! create` writes that). Never prints secrets. This is not a dump command.

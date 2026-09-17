@@ -8,7 +8,7 @@ use super::app;
 use super::data::normalize_data;
 use super::env::{
     existing_compose_files, is_local_source, local_data_root, remote_data_root, require_shop_id,
-    resolve_compose_dir, resolve_snapshot_dir, ShopEnv,
+    resolve_compose_dir, resolve_snapshot_dir, vps_project_name_opt, ShopEnv,
 };
 use super::error::Error;
 use super::import;
@@ -71,14 +71,7 @@ fn run_with(
             data_root.display()
         );
     }
-    let project = env
-        .get("COMPOSE_PROJECT_NAME")
-        .map(str::to_string)
-        .or_else(|| {
-            env.get("SHOPWARE_DEPLOY_ENV")
-                .map(|d| format!("{shop_id}-{d}"))
-        })
-        .unwrap_or_default();
+    let project = vps_project_name_opt(&env).unwrap_or_default();
     let compose_files = existing_compose_files(&compose_dir);
 
     println!(
@@ -146,13 +139,24 @@ fn run_local(
         return Err(Error::fail(dump_operator_instructions(snapshot_dir)));
     }
 
-    let stopped = app::stop_app_containers(compose_dir, compose_files, dry_run)?;
+    let stopped = app::stop_app_containers(
+        compose_dir,
+        compose_files,
+        vps_project_name_opt(env).as_deref(),
+        dry_run,
+    )?;
     let imported = import_db_if_present(env, cwd, selection, snapshot_dir, dry_run)?;
     rewrite::maybe_rewrite(env, signals, compose_dir, compose_files, imported, dry_run)?;
     for logical in &selection.volumes {
         volumes::sync_bind_local_roundtrip(env, data_root, snapshot_dir, logical, dry_run)?;
     }
-    app::start_stopped_app(compose_dir, compose_files, &stopped, dry_run)?;
+    app::start_stopped_app(
+        compose_dir,
+        compose_files,
+        vps_project_name_opt(env).as_deref(),
+        &stopped,
+        dry_run,
+    )?;
     app::post_restore_hints(
         env,
         rewrite::requested(env),
@@ -198,7 +202,12 @@ fn run_remote(
         return Err(Error::fail(dump_operator_instructions(snapshot_dir)));
     }
 
-    let stopped = app::stop_app_containers(compose_dir, compose_files, dry_run)?;
+    let stopped = app::stop_app_containers(
+        compose_dir,
+        compose_files,
+        vps_project_name_opt(env).as_deref(),
+        dry_run,
+    )?;
     let imported = import_db_if_present(env, cwd, selection, snapshot_dir, dry_run)?;
     rewrite::maybe_rewrite(env, signals, compose_dir, compose_files, imported, dry_run)?;
     for logical in &selection.volumes {
@@ -212,7 +221,13 @@ fn run_remote(
             dry_run,
         )?;
     }
-    app::start_stopped_app(compose_dir, compose_files, &stopped, dry_run)?;
+    app::start_stopped_app(
+        compose_dir,
+        compose_files,
+        vps_project_name_opt(env).as_deref(),
+        &stopped,
+        dry_run,
+    )?;
     app::post_restore_hints(
         env,
         rewrite::requested(env),

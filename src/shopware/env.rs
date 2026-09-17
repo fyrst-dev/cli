@@ -310,17 +310,39 @@ pub fn allow_live_restore(env: &ShopEnv) -> bool {
     env_truthy(env.get("SHOPWARE_ALLOW_LIVE_RESTORE"))
 }
 
+/// VPS Compose project `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}`.
+///
+/// `COMPOSE_PROJECT_NAME` is for local `shopware-cli project dev` / root
+/// `compose.yaml` only and must not name VPS stacks.
+pub fn vps_project_name(shop_id: &str, deploy_env: &str) -> String {
+    format!("{shop_id}-{deploy_env}")
+}
+
+/// Derived VPS project name when shop id and deploy env are both set.
+pub fn vps_project_name_opt(env: &ShopEnv) -> Option<String> {
+    match (env.get("SHOPWARE_SHOP_ID"), env.get("SHOPWARE_DEPLOY_ENV")) {
+        (Some(id), Some(deploy_env)) if !id.is_empty() && !deploy_env.is_empty() => {
+            Some(vps_project_name(id, deploy_env))
+        }
+        _ => None,
+    }
+}
+
 /// `(project_name, derived_from_shop_id_and_env)`.
+///
+/// Prefers `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}` so VPS named-volume
+/// fallback matches `docker compose -p`. `COMPOSE_PROJECT_NAME` is used only
+/// when shop id / deploy env are missing (local project-dev).
 pub fn derive_project_name(env: &ShopEnv) -> Result<(String, bool), Error> {
+    if let Some(n) = vps_project_name_opt(env) {
+        return Ok((n, true));
+    }
     if let Some(n) = env.get("COMPOSE_PROJECT_NAME") {
         return Ok((n.to_string(), false));
     }
-    match (env.get("SHOPWARE_SHOP_ID"), env.get("SHOPWARE_DEPLOY_ENV")) {
-        (Some(id), Some(deploy_env)) => Ok((format!("{id}-{deploy_env}"), true)),
-        _ => Err(Error::fail(
-            "Set COMPOSE_PROJECT_NAME in .env (must be unique on this Docker host), or set SHOPWARE_SHOP_ID and SHOPWARE_DEPLOY_ENV to derive ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV}.",
-        )),
-    }
+    Err(Error::fail(
+        "Set SHOPWARE_SHOP_ID and SHOPWARE_DEPLOY_ENV to derive ${SHOPWARE_SHOP_ID}-${SHOPWARE_DEPLOY_ENV} for VPS Compose. COMPOSE_PROJECT_NAME is for local shopware-cli project dev only.",
+    ))
 }
 
 /// Work directory for sync capture/apply (`--snapshot-dir`, else `var/runtime-sync`).
@@ -716,16 +738,29 @@ COMPOSE_PROFILES=redis
     }
 
     #[test]
-    fn compose_project_name_wins() {
+    fn compose_project_name_does_not_override_vps_name() {
         let mut vars = HashMap::new();
-        vars.insert("COMPOSE_PROJECT_NAME".into(), "sw-shop-acme".into());
+        vars.insert("COMPOSE_PROJECT_NAME".into(), "shopware-acme".into());
         vars.insert("SHOPWARE_SHOP_ID".into(), "acme".into());
         vars.insert("SHOPWARE_DEPLOY_ENV".into(), "live".into());
         let env = ShopEnv::from_vars(PathBuf::from("/tmp/x"), vars);
         assert_eq!(
             derive_project_name(&env).unwrap(),
-            ("sw-shop-acme".into(), false)
+            ("acme-live".into(), true)
         );
+        assert_eq!(vps_project_name_opt(&env).as_deref(), Some("acme-live"));
+    }
+
+    #[test]
+    fn compose_project_name_fallback_without_shop_identity() {
+        let mut vars = HashMap::new();
+        vars.insert("COMPOSE_PROJECT_NAME".into(), "shopware-acme".into());
+        let env = ShopEnv::from_vars(PathBuf::from("/tmp/x"), vars);
+        assert_eq!(
+            derive_project_name(&env).unwrap(),
+            ("shopware-acme".into(), false)
+        );
+        assert_eq!(vps_project_name_opt(&env), None);
     }
 
     #[test]

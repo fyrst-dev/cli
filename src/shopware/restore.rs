@@ -7,7 +7,7 @@
 use super::data::{normalize_data, DataSelection};
 use super::env::{
     existing_compose_files, require_shop_id, resolve_compose_dir, resolve_data_root,
-    resolve_snapshot_dir, ShopEnv,
+    resolve_snapshot_dir, vps_project_name_opt, ShopEnv,
 };
 use super::error::Error;
 use super::import::{self, ImportPlan};
@@ -41,6 +41,7 @@ pub enum RewriteAction {
 pub struct RestorePlan {
     pub compose_dir: PathBuf,
     pub compose_files: Vec<String>,
+    pub compose_project: Option<String>,
     pub shop_id: String,
     pub deploy_env: Option<String>,
     pub snapshot_dir: PathBuf,
@@ -182,6 +183,7 @@ pub fn plan_with_env(
     Ok(RestorePlan {
         compose_dir,
         compose_files,
+        compose_project: vps_project_name_opt(env),
         shop_id,
         deploy_env: env.get("SHOPWARE_DEPLOY_ENV").map(str::to_string),
         snapshot_dir,
@@ -219,7 +221,12 @@ pub fn execute(plan: &RestorePlan) -> Result<(), Error> {
         if plan.dry_run { 1 } else { 0 },
     );
 
-    let stopped = stop_app_containers(&plan.compose_dir, &plan.compose_files, plan.dry_run)?;
+    let stopped = stop_app_containers(
+        &plan.compose_dir,
+        &plan.compose_files,
+        plan.compose_project.as_deref(),
+        plan.dry_run,
+    )?;
 
     if let Some(imp) = &plan.import {
         import::execute(imp)?;
@@ -266,6 +273,7 @@ pub fn execute(plan: &RestorePlan) -> Result<(), Error> {
     start_stopped_app(
         &plan.compose_dir,
         &plan.compose_files,
+        plan.compose_project.as_deref(),
         &stopped,
         plan.dry_run,
     )?;
@@ -300,6 +308,7 @@ fn run_rewrite(compose_dir: &Path, docker_args: &[String]) -> Result<(), Error> 
 fn stop_app_containers(
     compose_dir: &Path,
     files: &[String],
+    project: Option<&str>,
     dry_run: bool,
 ) -> Result<Vec<String>, Error> {
     if dry_run {
@@ -309,20 +318,24 @@ fn stop_app_containers(
     if files.is_empty() {
         return Ok(Vec::new());
     }
-    let running = list_running_app_services(compose_dir, files);
+    let running = list_running_app_services(compose_dir, files, project);
     let mut stopped = Vec::new();
     for svc in ["web", "worker", "scheduler"] {
         if running.iter().any(|s| s == svc) {
             println!("==> Stopping {svc} for restore");
-            compose_stop(compose_dir, files, svc);
+            compose_stop(compose_dir, files, project, svc);
             stopped.push(svc.to_string());
         }
     }
     Ok(stopped)
 }
 
-fn list_running_app_services(compose_dir: &Path, files: &[String]) -> Vec<String> {
-    let mut args = compose_argv(files);
+fn list_running_app_services(
+    compose_dir: &Path,
+    files: &[String],
+    project: Option<&str>,
+) -> Vec<String> {
+    let mut args = compose_argv(files, project);
     args.extend([
         "--profile".into(),
         "worker".into(),
@@ -349,8 +362,8 @@ fn list_running_app_services(compose_dir: &Path, files: &[String]) -> Vec<String
         .collect()
 }
 
-fn compose_stop(compose_dir: &Path, files: &[String], svc: &str) {
-    let mut args = compose_argv(files);
+fn compose_stop(compose_dir: &Path, files: &[String], project: Option<&str>, svc: &str) {
+    let mut args = compose_argv(files, project);
     args.extend(["stop".into(), svc.to_string()]);
     let ok = Command::new("docker")
         .args(&args)
@@ -363,7 +376,7 @@ fn compose_stop(compose_dir: &Path, files: &[String], svc: &str) {
     if ok {
         return;
     }
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(files, project);
     args.extend([
         "--profile".into(),
         svc.to_string(),
@@ -381,6 +394,7 @@ fn compose_stop(compose_dir: &Path, files: &[String], svc: &str) {
 fn start_stopped_app(
     compose_dir: &Path,
     files: &[String],
+    project: Option<&str>,
     stopped: &[String],
     dry_run: bool,
 ) -> Result<(), Error> {
@@ -391,12 +405,12 @@ fn start_stopped_app(
         }
         println!("==> Starting {svc}");
         match svc.as_str() {
-            "web" => compose_up(compose_dir, files, None, "web")?,
+            "web" => compose_up(compose_dir, files, project, None, "web")?,
             "worker" => {
-                let _ = compose_up(compose_dir, files, Some("worker"), "worker");
+                let _ = compose_up(compose_dir, files, project, Some("worker"), "worker");
             }
             "scheduler" => {
-                let _ = compose_up(compose_dir, files, Some("scheduler"), "scheduler");
+                let _ = compose_up(compose_dir, files, project, Some("scheduler"), "scheduler");
             }
             _ => {}
         }
@@ -407,10 +421,11 @@ fn start_stopped_app(
 fn compose_up(
     compose_dir: &Path,
     files: &[String],
+    project: Option<&str>,
     profile: Option<&str>,
     svc: &str,
 ) -> Result<(), Error> {
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(files, project);
     if let Some(p) = profile {
         args.extend(["--profile".into(), p.to_string()]);
     }
@@ -459,14 +474,20 @@ fn post_restore_hints(plan: &RestorePlan) {
     }
     if plan.image.is_some() {
         println!("==> Trying cache:clear (non-fatal if the image/console is unavailable)");
-        if cache_clear(&plan.compose_dir, &plan.compose_files).is_err() {
+        if cache_clear(
+            &plan.compose_dir,
+            &plan.compose_files,
+            plan.compose_project.as_deref(),
+        )
+        .is_err()
+        {
             println!("==> cache:clear skipped or failed — not fatal");
         }
     }
 }
 
-fn cache_clear(compose_dir: &Path, files: &[String]) -> Result<(), Error> {
-    let mut args = compose_argv(files);
+fn cache_clear(compose_dir: &Path, files: &[String], project: Option<&str>) -> Result<(), Error> {
+    let mut args = compose_argv(files, project);
     args.extend([
         "run".into(),
         "--rm".into(),

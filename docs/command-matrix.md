@@ -110,8 +110,11 @@ Resolves shop root (`COMPOSE_DIR` or walk from cwd), loads `.env` then
 Compose is always:
 
 ```text
-docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml
+docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml -p <SHOPWARE_SHOP_ID>-<SHOPWARE_DEPLOY_ENV>
 ```
+
+`-p` wins over `.env` `COMPOSE_PROJECT_NAME` (that key is for local
+`shopware-cli project dev` only). VPS stacks stay `<shop-id>-<env>`.
 
 Never `--build`. `compose run` uses `--pull never` (not `--no-build`). `compose up`
 uses `--no-build` (and `--pull never` when skipping registry pull). Theme/asset
@@ -179,11 +182,13 @@ shell expansion**), same parser as import (`src/shopware/envfile.rs`).
 3. `--env` is `live` | `staging` | `playground` | `dev`. Default `live` when
    unset/empty; keep an existing non-empty value.
 4. `--image` sets `IMAGE` (no whitespace). Unset leaves `IMAGE` as-is.
-5. Sets `COMPOSE_PROJECT_NAME=shopware-<shop-id>` so local
-   `shopware-cli project dev` and Compose share a stable name (create writes
+5. Sets `COMPOSE_PROJECT_NAME=shopware-<shop-id>` for **local**
+   `shopware-cli project dev` / root `compose.yaml` (create writes
    `COMPOSE_PROJECT_NAME=sw-…`). Pattern is exactly `shopware-<shop-id>` —
-   no `SHOPWARE_DEPLOY_ENV` suffix. If the file only has a commented
-   `# COMPOSE_PROJECT_NAME=…` line, an uncommented assignment is appended.
+   no `SHOPWARE_DEPLOY_ENV` suffix. This does **not** rename VPS stacks.
+   VPS compose pins `-p <shop-id>-<env>` so live and staging stay distinct
+   on one host. If the file only has a commented `# COMPOSE_PROJECT_NAME=…`
+   line, an uncommented assignment is appended.
 6. `--dry-run` prints the summary and does not write `.env`.
 7. After a real write: `chmod 600 .env`.
 
@@ -257,7 +262,7 @@ from the process environment win when non-empty). Requires `SHOPWARE_SHOP_ID`.
 
 1. If a compose `mysql` service is present: on execute,
    `docker compose … up -d --no-build mysql`, wait until pingable, then
-   `gzip -dc FILE | docker compose --env-file .env -f … exec -T mysql sh -c
+   `gzip -dc FILE | docker compose --env-file .env -f … -p <shop-id>-<env> exec -T mysql sh -c
    '<mysql|mariadb>'` (plain `.sql` is stdin, not gzip).
 2. Else `DATABASE_URL` to a real host: `gzip -dc FILE | docker run --rm -i
    --network host <mysql:8.4|mariadb:11.4> mysql <database>`. Host `mysql`
@@ -352,8 +357,9 @@ Local: rsync (or a tree copy if rsync is missing) from
 `$SHOPWARE_DATA_ROOT` / derived
 `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV/<item>`
 into `--snapshot-dir/data/<item>/`. If the bind-mount directory is missing,
-named-volume fallback `${COMPOSE_PROJECT_NAME}_<item>` via
-`alpine:3.20` writes `--snapshot-dir/volumes/<item>.tar.gz`.
+named-volume fallback `{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}_<item>` via
+`alpine:3.20` writes `--snapshot-dir/volumes/<item>.tar.gz` (VPS project
+name, not local `COMPOSE_PROJECT_NAME`).
 
 Remote `--from <alias>`: SSH + rsync (or tar over SSH) from
 `SHOPWARE_REMOTE_DATA_ROOT` or derived
@@ -493,7 +499,8 @@ shopware-cli.
    `$SHOPWARE_DATA_ROOT/<item>/` (or derived
    `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV`) into
    `data/<item>/`. Missing bind-mounts fall back to a named-volume tar
-   (`${COMPOSE_PROJECT_NAME}_<item>`, `alpine:3.20`). Local target writes the
+   (`{SHOPWARE_SHOP_ID}-{SHOPWARE_DEPLOY_ENV}_<item>`, `alpine:3.20`; not
+   local `COMPOSE_PROJECT_NAME`). Local target writes the
    timestamped dir in place; SSH target builds under
    `<shop>/var/backup-work/<stamp>` then rsyncs (`SHOPWARE_SSH_KEY`).
 4. If `--data` includes `db`: **do not dump**. `--dry-run` prints

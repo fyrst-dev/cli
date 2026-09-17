@@ -36,6 +36,7 @@ impl TempShop {
             "\
 SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=staging
+COMPOSE_PROJECT_NAME=shopware-acme
 MYSQL_USER=shop
 MYSQL_PASSWORD=super-secret-pass
 MYSQL_DATABASE=shopware
@@ -171,6 +172,8 @@ fn dry_run_bundled_mysql_without_password() {
     assert!(log.contains("exec -T mysql"), "{log}");
     assert!(log.contains("docker compose --env-file .env"), "{log}");
     assert!(log.contains("-f deploy/compose.yaml"), "{log}");
+    assert!(log.contains("-p acme-staging"), "{log}");
+    assert!(!log.contains("-p shopware-acme"), "{log}");
 }
 
 #[test]

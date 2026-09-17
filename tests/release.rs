@@ -134,7 +134,7 @@ fn release_help_documents_flags() {
 #[test]
 fn dry_run_prints_compose_sequence_without_passwords() {
     let shop = TempShop::new("dry");
-    shop.write_env("SMOKE_URL=http://127.0.0.1:8000\nCOMPOSE_PROFILES=redis,worker,scheduler\n");
+    shop.write_env("SMOKE_URL=http://127.0.0.1:8000\nCOMPOSE_PROFILES=redis,worker,scheduler\nCOMPOSE_PROJECT_NAME=shopware-acme\n");
     fs::write(shop.path().join(".deployed-tag"), "oldtag\n").unwrap();
     let out = release(shop.path(), &["--dry-run"], &[]);
     assert_eq!(
@@ -157,6 +157,8 @@ fn dry_run_prints_compose_sequence_without_passwords() {
         log.contains("DRY-RUN docker compose --env-file .env -f deploy/compose.yaml -f deploy/compose.prod.yaml -f deploy/compose.vps.yaml"),
         "{log}"
     );
+    assert!(log.contains("-p acme-staging"), "{log}");
+    assert!(!log.contains("-p shopware-acme"), "{log}");
     assert!(
         log.contains("--profile setup run --rm --pull never setup"),
         "{log}"

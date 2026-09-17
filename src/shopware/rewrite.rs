@@ -3,7 +3,7 @@
 //! Target URL is `APP_URL`. On live, rewrite is skipped (APP_URL is a shop
 //! runtime var, not a restore opt-in — refusing it would block live DR).
 
-use super::env::{existing_compose_files, ShopEnv};
+use super::env::{existing_compose_files, vps_project_name_opt, ShopEnv};
 use super::error::Error;
 use super::live::LiveSignals;
 use super::mysql::{compose_argv, compose_cli_log, require_docker};
@@ -53,7 +53,7 @@ pub fn console_flag_args(env: &ShopEnv, checkout: &str, dry_run: bool) -> Vec<St
 pub fn compose_rewrite_args(env: &ShopEnv, compose_dir: &Path, dry_run: bool) -> Vec<String> {
     let files = existing_compose_files(compose_dir);
     let checkout = super::live::shop_basename(compose_dir);
-    let mut args = compose_argv(&files);
+    let mut args = compose_argv(&files, vps_project_name_opt(env).as_deref());
     args.extend([
         "run".into(),
         "--rm".into(),
@@ -75,7 +75,7 @@ pub fn rewrite_log_line(env: &ShopEnv, compose_dir: &Path, dry_run: bool) -> Str
     let flags = console_flag_args(env, &checkout, dry_run);
     format!(
         "{} run --rm --pull never --entrypoint php web bin/console fyrst:sales-channel:rewrite-urls {}",
-        compose_cli_log(&files),
+        compose_cli_log(&files, vps_project_name_opt(env).as_deref()),
         flags.join(" ")
     )
 }
@@ -126,7 +126,7 @@ pub fn maybe_rewrite(
     }
     let checkout = super::live::shop_basename(compose_dir);
     let args = {
-        let mut a = compose_argv(files);
+        let mut a = compose_argv(files, vps_project_name_opt(env).as_deref());
         a.extend([
             "run".into(),
             "--rm".into(),
@@ -219,13 +219,20 @@ mod tests {
 
     #[test]
     fn compose_line_is_console_not_sql() {
-        let env = env_from(&[("APP_URL", "https://staging.example.com")]);
+        let env = env_from(&[
+            ("APP_URL", "https://staging.example.com"),
+            ("SHOPWARE_SHOP_ID", "acme"),
+            ("SHOPWARE_DEPLOY_ENV", "staging"),
+            ("COMPOSE_PROJECT_NAME", "shopware-acme"),
+        ]);
         let line = rewrite_log_line(&env, Path::new("/shops/acme-staging"), true);
         assert!(line.contains("fyrst:sales-channel:rewrite-urls"), "{line}");
         assert!(
             line.contains("run --rm --pull never --entrypoint php"),
             "{line}"
         );
+        assert!(line.contains("-p acme-staging"), "{line}");
+        assert!(!line.contains("-p shopware-acme"), "{line}");
         assert!(line.contains("--dry-run"), "{line}");
         assert!(
             !line.to_ascii_lowercase().contains("update sales_channel"),
@@ -233,6 +240,7 @@ mod tests {
         );
         let args = compose_rewrite_args(&env, Path::new("/shops/acme-staging"), false);
         assert!(args.contains(&"fyrst:sales-channel:rewrite-urls".to_string()));
+        assert!(args.windows(2).any(|w| w == ["-p", "acme-staging"]));
         assert!(!args.iter().any(|a| a == "--dry-run"));
     }
 

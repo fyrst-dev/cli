@@ -156,22 +156,34 @@ pub fn client_image_for_url(scheme: &str, _env: &ShopEnv) -> String {
     }
 }
 
-pub fn compose_argv(files: &[String]) -> Vec<String> {
+/// `docker compose --env-file .env -f …` plus `-p <project>` when set.
+///
+/// `-p` is Compose's highest-precedence project name and wins over
+/// `COMPOSE_PROJECT_NAME` in `.env` (that key is for local project-dev).
+pub fn compose_argv(files: &[String], project: Option<&str>) -> Vec<String> {
     let mut a = vec!["compose".into(), "--env-file".into(), ".env".into()];
     for f in files {
         a.push("-f".into());
         a.push(f.clone());
     }
+    pin_compose_project(&mut a, project);
     a
 }
 
-pub fn compose_cli_log(files: &[String]) -> String {
-    let mut s = String::from("docker compose --env-file .env");
-    for f in files {
-        s.push_str(" -f ");
-        s.push_str(f);
+pub fn compose_cli_log(files: &[String], project: Option<&str>) -> String {
+    let mut s = String::from("docker");
+    for a in compose_argv(files, project) {
+        s.push(' ');
+        s.push_str(&a);
     }
     s
+}
+
+fn pin_compose_project(args: &mut Vec<String>, project: Option<&str>) {
+    if let Some(p) = project.map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("-p".into());
+        args.push(p.to_string());
+    }
 }
 
 pub fn require_docker() -> Result<(), Error> {
@@ -205,13 +217,17 @@ pub fn require_gzip() -> Result<(), Error> {
     }
 }
 
-pub fn compose_up_mysql(compose_dir: &Path, files: &[String]) -> Result<(), Error> {
+pub fn compose_up_mysql(
+    compose_dir: &Path,
+    files: &[String],
+    project: Option<&str>,
+) -> Result<(), Error> {
     if files.is_empty() {
         return Err(Error::fail(
             "No compose files found under shop root; cannot start service mysql.",
         ));
     }
-    let mut args = compose_argv(files);
+    let mut args = compose_argv(files, project);
     args.extend([
         "up".into(),
         "-d".into(),
@@ -228,11 +244,11 @@ pub fn compose_up_mysql(compose_dir: &Path, files: &[String]) -> Result<(), Erro
             "docker compose up mysql failed. Is Docker running, and is the mysql service defined?",
         ));
     }
-    wait_mysql(compose_dir, files)
+    wait_mysql(compose_dir, files, project)
 }
 
-fn wait_mysql(compose_dir: &Path, files: &[String]) -> Result<(), Error> {
-    let mut args = compose_argv(files);
+fn wait_mysql(compose_dir: &Path, files: &[String], project: Option<&str>) -> Result<(), Error> {
+    let mut args = compose_argv(files, project);
     args.extend([
         "exec".into(),
         "-T".into(),
@@ -359,6 +375,37 @@ mod tests {
             client_image_for_url("mariadb", &env),
             DEFAULT_MARIADB_CLIENT_IMAGE
         );
+    }
+
+    #[test]
+    fn compose_argv_pins_vps_project_after_files() {
+        let files = vec![
+            "deploy/compose.yaml".into(),
+            "deploy/compose.prod.yaml".into(),
+        ];
+        let a = compose_argv(&files, Some("acme-staging"));
+        assert_eq!(
+            a,
+            vec![
+                "compose",
+                "--env-file",
+                ".env",
+                "-f",
+                "deploy/compose.yaml",
+                "-f",
+                "deploy/compose.prod.yaml",
+                "-p",
+                "acme-staging",
+            ]
+        );
+        let log = compose_cli_log(&files, Some("acme-live"));
+        assert!(log.contains("-p acme-live"), "{log}");
+        assert!(
+            log.starts_with("docker compose --env-file .env -f deploy/compose.yaml"),
+            "{log}"
+        );
+        let plain = compose_argv(&files, None);
+        assert!(!plain.iter().any(|s| s == "-p"));
     }
 
     #[test]
