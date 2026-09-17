@@ -8,7 +8,7 @@ use super::app;
 use super::data::normalize_data;
 use super::env::{
     existing_compose_files, is_local_source, local_data_root, remote_data_root, require_shop_id,
-    resolve_compose_dir, resolve_snapshot_dir, ShopEnv,
+    resolve_compose_dir, resolve_snapshot_dir, vps_project_name_opt, ShopEnv,
 };
 use super::error::Error;
 use super::import;
