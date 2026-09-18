@@ -98,8 +98,12 @@ const LEAK_KEYS: &[&str] = &[
     "IMAGE_TAG",
     "COMPOSE_PROFILES",
     "SMOKE_URL",
+    "DEPLOY_HEALTH_URL",
+    "ALLOW_NO_DEPLOY_HEALTH",
+    "APP_URL",
     "PULL_POLICY",
     "SKIP_PULL",
+    "ROLLBACK_ON_FAIL",
 ];
 
 fn rollback(shop: &Path, extra: &[&str], extra_env: &[(&str, &str)]) -> Output {
@@ -153,9 +157,17 @@ fn rollback_help_lists_flags() {
         .unwrap();
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout);
-    for needle in ["--dry-run", "--skip-pull"] {
+    for needle in ["--dry-run", "--skip-pull", "--allow-no-deploy-health"] {
         assert!(help.contains(needle), "missing {needle} in:\n{help}");
     }
+    assert!(
+        help.contains("ROLLBACK_ON_FAIL"),
+        "help should document ROLLBACK_ON_FAIL:\n{help}"
+    );
+    assert!(
+        !help.contains("ROLLBACK_ON_SMOKE_FAIL") && !help.contains("SMOKE_URL"),
+        "old smoke names still in help:\n{help}"
+    );
 }
 
 #[test]
@@ -326,7 +338,7 @@ fn skip_pull_via_env() {
 }
 
 #[test]
-fn smoke_url_dry_run_does_not_curl() {
+fn smoke_url_does_not_drive_probe() {
     let shop = TempShop::new("smoke");
     shop.write_min_shop();
     shop.write_previous("t1\n");
@@ -339,12 +351,31 @@ fn smoke_url_dry_run_does_not_curl() {
     );
     assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
     let log = stdout(&out);
-    assert!(
-        log.contains("DRY-RUN would GET http://127.0.0.1:9/"),
-        "{log}"
-    );
+    assert!(!log.contains("DRY-RUN would GET"), "{log}");
+    assert!(!log.contains("http://127.0.0.1:9/"), "{log}");
     assert!(
         log.contains("DRY-RUN would write .deployed-tag=t1"),
+        "{log}"
+    );
+    assert!(!shop.path().join("trap-invoked").is_file());
+}
+
+#[test]
+fn deploy_health_url_dry_run_does_not_curl() {
+    let shop = TempShop::new("health-url");
+    shop.write_min_shop();
+    shop.write_previous("t1\n");
+    let trap = shop.install_docker_trap();
+    let out = rollback_with_path(
+        shop.path(),
+        &["--dry-run"],
+        &[("DEPLOY_HEALTH_URL", "http://127.0.0.1:9/")],
+        Some(&trap),
+    );
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let log = stdout(&out);
+    assert!(
+        log.contains("DRY-RUN would GET http://127.0.0.1:9/"),
         "{log}"
     );
     assert!(!shop.path().join("trap-invoked").is_file());
@@ -362,4 +393,43 @@ fn setup_in_profiles_refused() {
     );
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
     assert!(stderr(&out).contains("setup"), "{}", stderr(&out));
+}
+
+#[test]
+fn live_refuses_without_probe_url() {
+    let shop = TempShop::new("live-no-probe");
+    shop.write_min_shop();
+    shop.write_previous("t1\n");
+    let out = rollback(
+        shop.path(),
+        &["--dry-run"],
+        &[("SHOPWARE_DEPLOY_ENV", "live")],
+    );
+    assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("DEPLOY_HEALTH_URL"), "{err}");
+    assert!(err.contains("--allow-no-deploy-health"), "{err}");
+    assert!(!shop.path().join(".deployed-tag").is_file());
+}
+
+#[test]
+fn live_allow_no_deploy_health_flag_skips_probe() {
+    let shop = TempShop::new("live-hatch");
+    shop.write_min_shop();
+    shop.write_previous("t1\n");
+    let out = rollback(
+        shop.path(),
+        &["--dry-run", "--allow-no-deploy-health"],
+        &[("SHOPWARE_DEPLOY_ENV", "live")],
+    );
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    assert!(
+        combined_rb(&out).contains("ops escape only"),
+        "{}",
+        combined_rb(&out)
+    );
+}
+
+fn combined_rb(out: &Output) -> String {
+    format!("{}{}", stdout(out), stderr(out))
 }

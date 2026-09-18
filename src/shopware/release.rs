@@ -1,14 +1,14 @@
 //! `fyrst-cli shopware deploy release` — VPS image pull + Compose recreate.
 //!
 //! Matches recipes `deploy/vps-release.sh`. Never builds images or compiles
-//! themes/assets. Auto-rollback on smoke failure uses the shared rollout
+//! themes/assets. Auto-rollback on deploy-health failure uses the shared rollout
 //! helper (`fyrst-cli shopware deploy rollback` is the operator command).
 
 use super::env::{resolve_compose_dir, ShopEnv};
 use super::error::Error;
 use super::rollout::{
-    bootstrap, docker_log_checked, ensure_env_prod, execute_rollout, read_tag_file,
-    record_previous_tag, rollout_to_tag, smoke, smoke_fail_message, write_tag_file,
+    bootstrap, deploy_health, deploy_health_fail_message, docker_log_checked, ensure_env_prod,
+    execute_rollout, read_tag_file, record_previous_tag, rollout_to_tag, write_tag_file,
     ROLLBACK_ONE_LINER,
 };
 use crate::cli::ReleaseArgs;
@@ -20,6 +20,9 @@ pub fn run(args: ReleaseArgs) -> Result<(), Error> {
     let mut process_env: HashMap<String, String> = std::env::vars().collect();
     if args.skip_pull {
         process_env.insert("SKIP_PULL".into(), "1".into());
+    }
+    if args.allow_no_deploy_health {
+        process_env.insert("ALLOW_NO_DEPLOY_HEALTH".into(), "1".into());
     }
     let cwd = std::env::current_dir().map_err(|e| Error::fail(format!("cannot read cwd: {e}")))?;
     execute_release(&process_env, &cwd, args.skip_pull, args.dry_run)
@@ -78,12 +81,15 @@ pub fn execute_release(
 
     execute_rollout(&ctx, &plan)?;
 
-    if let Err(_e) = smoke(&ctx) {
-        let url = ctx.smoke_url.as_deref().unwrap_or("SMOKE_URL");
-        let mut msg = smoke_fail_message(url);
+    if let Err(_e) = deploy_health(&ctx) {
+        let url = ctx
+            .deploy_health_url
+            .as_deref()
+            .unwrap_or("DEPLOY_HEALTH_URL");
+        let mut msg = deploy_health_fail_message(url);
         if ctx.should_auto_rollback() {
             println!(
-                "==> ROLLBACK_ON_SMOKE_FAIL on (SHOPWARE_DEPLOY_ENV={}; live default is on, others off unless ROLLBACK_ON_SMOKE_FAIL=1)",
+                "==> ROLLBACK_ON_FAIL on (SHOPWARE_DEPLOY_ENV={}; live default is on, others off unless ROLLBACK_ON_FAIL=1)",
                 ctx.deploy_env
             );
             let Some(tag) = previous.filter(|t| !t.is_empty()) else {
@@ -101,12 +107,12 @@ pub fn execute_release(
                 return Err(Error::fail(msg));
             }
             msg.push_str(
-                "\nERROR: Rolled back after smoke failure. Release still exits 1 so CI does not treat the new tag as live.",
+                "\nERROR: Rolled back after deploy health failure. Release still exits 1 so CI does not treat the new tag as live.",
             );
             return Err(Error::fail(msg));
         }
         println!(
-            "==> Auto-rollback skipped (SHOPWARE_DEPLOY_ENV={}; set ROLLBACK_ON_SMOKE_FAIL=1 to enable)",
+            "==> Auto-rollback skipped (SHOPWARE_DEPLOY_ENV={}; set ROLLBACK_ON_FAIL=1 to enable)",
             ctx.deploy_env
         );
         return Err(Error::fail(msg));
@@ -175,7 +181,7 @@ fn print_dry_run(
             format!("==> DRY-RUN extra profiles: {}", plan.profiles_raw),
         )?;
     }
-    if let Some(url) = &ctx.smoke_url {
+    if let Some(url) = &ctx.deploy_health_url {
         emit(ctx, format!("==> DRY-RUN would GET {url}"))?;
     }
     Ok(())

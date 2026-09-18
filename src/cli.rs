@@ -33,6 +33,9 @@ Live policy (refuse a live consumer unless):
   sync pull         SHOPWARE_ALLOW_LIVE_RESTORE=1 only
   backup recover    confirm flag + SHOPWARE_ALLOW_LIVE_RESTORE=1
                     (--i-understand-this-restores-this-host or BACKUP_CONFIRM_RESTORE=1)
+  deploy release    post-deploy health probe (DEPLOY_HEALTH_URL or APP_URL);
+                    ops escape: --allow-no-deploy-health / ALLOW_NO_DEPLOY_HEALTH=1
+  deploy rollback   same probe require as release
 
 Dump = shopware-cli project dump only (fyrst-cli does not dump).
 Import = fyrst-cli shopware db import (also used by sync apply --data db and sync pull).
@@ -48,6 +51,16 @@ Backup prune = stamp-based retention under BACKUP_TARGET (BACKUP_KEEP_DAYS).
 backup recover = disaster recovery onto this host (confirmation required).
 See docs/command-matrix.md.
 ";
+
+pub const DEPLOY_HEALTH_AFTER_HELP: &str = "\
+Post-deploy health probe (curl -fsS, 30 attempts, 2s sleep):\n  \
+  Default: APP_URL with trailing slash stripped + /api/_info/health-check\n  \
+  Override: DEPLOY_HEALTH_URL (full URL, used as-is)\n  \
+  Live (SHOPWARE_DEPLOY_ENV=live): a probe URL is required.\n  \
+  Ops escape only: --allow-no-deploy-health or ALLOW_NO_DEPLOY_HEALTH=1\n  \
+  Non-live: skip the probe when no URL can be resolved.\n  \
+  Probe failure auto-rollback still uses ROLLBACK_ON_FAIL\n  \
+  (unset → on for live, off otherwise).\n";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -113,7 +126,9 @@ import `db.sql.gz` from `--snapshot-dir` if `--data` includes db (does not dump)
 database, never local SHOPWARE_DATA_ROOT). `--data all` is refused (all includes db on sync pull / backup create). \
 Dumps stay with `shopware-cli project dump` — this CLI does not wrap dump.\n\n\
 `deploy rollback` is implemented: same compose files and order as `vps-release.sh`, with \
-IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored).\n\n\
+IMAGE_TAG only from `.previous-tag` (process-env IMAGE_TAG is ignored). Live requires a \
+post-deploy health probe (`DEPLOY_HEALTH_URL` or `APP_URL` + `/api/_info/health-check`); \
+`--allow-no-deploy-health` / `ALLOW_NO_DEPLOY_HEALTH=1` is an ops escape only.\n\n\
 `backup create` copies bind-mount trees (and an operator-provided db.sql.gz) into \
 BACKUP_TARGET; it is allowed on live. \
 `backup prune` is implemented: stamp-based retention under BACKUP_TARGET \
@@ -220,6 +235,7 @@ pub struct InitEnvArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = DEPLOY_HEALTH_AFTER_HELP)]
 pub struct ReleaseArgs {
     /// Print the compose sequence; do not pull or recreate containers
     #[arg(long)]
@@ -228,9 +244,14 @@ pub struct ReleaseArgs {
     /// Same-host / air-gap: skip registry pull, PULL_POLICY=never
     #[arg(long = "skip-pull")]
     pub skip_pull: bool,
+
+    /// Ops escape only: skip the live require for a post-deploy health probe (or set ALLOW_NO_DEPLOY_HEALTH=1)
+    #[arg(long = "allow-no-deploy-health")]
+    pub allow_no_deploy_health: bool,
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = DEPLOY_HEALTH_AFTER_HELP)]
 pub struct RollbackArgs {
     /// Print the compose sequence; do not pull or recreate containers
     #[arg(long)]
@@ -239,6 +260,10 @@ pub struct RollbackArgs {
     /// Same-host / air-gap: skip registry pull, PULL_POLICY=never
     #[arg(long = "skip-pull")]
     pub skip_pull: bool,
+
+    /// Ops escape only: skip the live require for a post-deploy health probe (or set ALLOW_NO_DEPLOY_HEALTH=1)
+    #[arg(long = "allow-no-deploy-health")]
+    pub allow_no_deploy_health: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -588,6 +613,29 @@ mod tests {
             }) => {
                 assert!(op.dry_run);
                 assert!(op.skip_pull);
+                assert!(!op.allow_no_deploy_health);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deploy_release_parses_allow_no_deploy_health() {
+        let cli = Cli::try_parse_from([
+            "fyrst-cli",
+            "shopware",
+            "deploy",
+            "release",
+            "--allow-no-deploy-health",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Shopware(ShopwareArgs {
+                command: ShopwareCommand::Deploy(DeployCommand::Release(op)),
+            }) => {
+                assert!(op.allow_no_deploy_health);
+                assert!(!op.dry_run);
+                assert!(!op.skip_pull);
             }
             other => panic!("unexpected parse: {other:?}"),
         }
@@ -635,6 +683,7 @@ mod tests {
             }) => {
                 assert!(op.dry_run);
                 assert!(op.skip_pull);
+                assert!(!op.allow_no_deploy_health);
             }
             other => panic!("unexpected parse: {other:?}"),
         }
