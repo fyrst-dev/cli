@@ -30,9 +30,10 @@ const PROCESS_WINS: &[&str] = &[
     "SHOPWARE_SSH_KEY",
     "SHOPWARE_ALLOW_LIVE_RESTORE",
     "APP_URL",
-    "SMOKE_URL",
+    "DEPLOY_HEALTH_URL",
+    "ALLOW_NO_DEPLOY_HEALTH",
     "COMPOSE_PROFILES",
-    "ROLLBACK_ON_SMOKE_FAIL",
+    "ROLLBACK_ON_FAIL",
     "SKIP_PULL",
     "PULL_POLICY",
     "BACKUP_TARGET",
@@ -599,7 +600,7 @@ services:
         .unwrap();
         fs::write(
             shop.join(".env.prod"),
-            "APP_URL=http://from-prod\nSMOKE_URL=http://smoke\n",
+            "APP_URL=http://from-prod\nDEPLOY_HEALTH_URL=http://health\n",
         )
         .unwrap();
         let mut process = HashMap::new();
@@ -609,7 +610,7 @@ services:
         assert_eq!(env.get("APP_URL"), Some("http://from-prod"));
         assert_eq!(env.get("SHOPWARE_SSH_HOST"), Some("vps.local"));
         assert_eq!(env.get("BACKUP_TARGET"), Some("/from-local"));
-        assert_eq!(env.get("SMOKE_URL"), Some("http://smoke"));
+        assert_eq!(env.get("DEPLOY_HEALTH_URL"), Some("http://health"));
         let _ = fs::remove_dir_all(&shop);
     }
 
@@ -649,7 +650,7 @@ SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=live
 IMAGE=ghcr.io/from-file/shop
 IMAGE_TAG=latest
-SMOKE_URL=http://from-file
+DEPLOY_HEALTH_URL=http://from-file-health
 COMPOSE_PROFILES=redis
 ",
         )
@@ -657,11 +658,17 @@ COMPOSE_PROFILES=redis
         let mut process = HashMap::new();
         process.insert("IMAGE".into(), "ghcr.io/from-ci/shop".into());
         process.insert("IMAGE_TAG".into(), "abc123deadbeef".into());
-        process.insert("SMOKE_URL".into(), "http://127.0.0.1:8000".into());
+        process.insert(
+            "DEPLOY_HEALTH_URL".into(),
+            "http://127.0.0.1:8000/api/_info/health-check".into(),
+        );
         let env = ShopEnv::load(shop.clone(), &process).unwrap();
         assert_eq!(env.get("IMAGE"), Some("ghcr.io/from-ci/shop"));
         assert_eq!(env.get("IMAGE_TAG"), Some("abc123deadbeef"));
-        assert_eq!(env.get("SMOKE_URL"), Some("http://127.0.0.1:8000"));
+        assert_eq!(
+            env.get("DEPLOY_HEALTH_URL"),
+            Some("http://127.0.0.1:8000/api/_info/health-check")
+        );
         assert_eq!(env.get("COMPOSE_PROFILES"), Some("redis"));
         let _ = fs::remove_dir_all(&shop);
     }

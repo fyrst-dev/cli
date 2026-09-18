@@ -79,9 +79,12 @@ const LEAK_KEYS: &[&str] = &[
     "IMAGE_TAG",
     "COMPOSE_PROFILES",
     "SMOKE_URL",
+    "DEPLOY_HEALTH_URL",
+    "ALLOW_NO_DEPLOY_HEALTH",
+    "APP_URL",
     "PULL_POLICY",
     "SKIP_PULL",
-    "ROLLBACK_ON_SMOKE_FAIL",
+    "ROLLBACK_ON_FAIL",
     "MYSQL_PASSWORD",
     "MYSQL_ROOT_PASSWORD",
     "DATABASE_URL",
@@ -126,15 +129,35 @@ fn release_help_documents_flags() {
         .unwrap();
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout);
-    for needle in ["--dry-run", "--skip-pull"] {
+    for needle in ["--dry-run", "--skip-pull", "--allow-no-deploy-health"] {
         assert!(help.contains(needle), "missing {needle} in:\n{help}");
     }
+    assert!(
+        help.contains("DEPLOY_HEALTH_URL"),
+        "help should document DEPLOY_HEALTH_URL:\n{help}"
+    );
+    assert!(
+        help.contains("Ops escape"),
+        "help should mark the live hatch as ops escape:\n{help}"
+    );
+    assert!(
+        help.contains("ROLLBACK_ON_FAIL"),
+        "help should document ROLLBACK_ON_FAIL:\n{help}"
+    );
+    assert!(
+        !help.contains("ROLLBACK_ON_SMOKE_FAIL"),
+        "old env name still in help:\n{help}"
+    );
+    assert!(
+        !help.contains("SMOKE_URL"),
+        "SMOKE_URL should not appear in help:\n{help}"
+    );
 }
 
 #[test]
 fn dry_run_prints_compose_sequence_without_passwords() {
     let shop = TempShop::new("dry");
-    shop.write_env("SMOKE_URL=http://127.0.0.1:8000\nCOMPOSE_PROFILES=redis,worker,scheduler\nCOMPOSE_PROJECT_NAME=shopware-acme\n");
+    shop.write_env("DEPLOY_HEALTH_URL=http://127.0.0.1:8000/api/_info/health-check\nCOMPOSE_PROFILES=redis,worker,scheduler\nCOMPOSE_PROJECT_NAME=shopware-acme\n");
     fs::write(shop.path().join(".deployed-tag"), "oldtag\n").unwrap();
     let out = release(shop.path(), &["--dry-run"], &[]);
     assert_eq!(
@@ -176,7 +199,7 @@ fn dry_run_prints_compose_sequence_without_passwords() {
         "{log}"
     );
     assert!(
-        log.contains("DRY-RUN would GET http://127.0.0.1:8000"),
+        log.contains("DRY-RUN would GET http://127.0.0.1:8000/api/_info/health-check"),
         "{log}"
     );
     assert!(
@@ -286,6 +309,7 @@ SHOPWARE_SHOP_ID=acme
 SHOPWARE_DEPLOY_ENV=live
 IMAGE=ghcr.io/fyrst-dev/acme
 IMAGE_TAG=deadbeef
+APP_URL=https://shop.example.com/
 ",
     )
     .unwrap();
@@ -297,6 +321,11 @@ IMAGE_TAG=deadbeef
     assert!(
         err.contains("COMPOSE_PROFILES=redis,worker,scheduler"),
         "{err}"
+    );
+    let log = stdout(&out);
+    assert!(
+        log.contains("DRY-RUN would GET https://shop.example.com/api/_info/health-check"),
+        "{log}"
     );
 }
 
@@ -348,4 +377,163 @@ fn missing_image_tag_exits_1() {
     let out = release(shop.path(), &["--dry-run"], &[]);
     assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
     assert!(stderr(&out).contains("IMAGE_TAG"), "{}", stderr(&out));
+}
+
+#[test]
+fn smoke_url_alone_does_not_drive_probe() {
+    let shop = TempShop::new("smoke-ignored");
+    shop.write_env("SMOKE_URL=http://127.0.0.1:8000\n");
+    let out = release(shop.path(), &["--dry-run"], &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let log = stdout(&out);
+    assert!(!log.contains("DRY-RUN would GET"), "{log}");
+    assert!(!log.contains("http://127.0.0.1:8000"), "{log}");
+    assert!(!combined(&out).contains("deprecated"), "{}", combined(&out));
+}
+
+#[test]
+fn smoke_url_does_not_override_app_url_probe() {
+    let shop = TempShop::new("smoke-not-override");
+    shop.write_env("SMOKE_URL=http://127.0.0.1:8000\nAPP_URL=https://staging.example.com/\n");
+    let out = release(shop.path(), &["--dry-run"], &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let log = stdout(&out);
+    assert!(
+        log.contains("DRY-RUN would GET https://staging.example.com/api/_info/health-check"),
+        "{log}"
+    );
+    assert!(!log.contains("http://127.0.0.1:8000"), "{log}");
+}
+
+#[test]
+fn app_url_default_probe_strips_trailing_slash() {
+    let shop = TempShop::new("app-url-join");
+    shop.write_env("APP_URL=https://staging.example.com/\n");
+    let out = release(shop.path(), &["--dry-run"], &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let log = stdout(&out);
+    assert!(
+        log.contains("DRY-RUN would GET https://staging.example.com/api/_info/health-check"),
+        "{log}"
+    );
+}
+
+#[test]
+fn live_refuses_without_probe_url() {
+    let shop = TempShop::new("live-no-probe");
+    fs::write(
+        shop.path().join(".env"),
+        "\
+SHOPWARE_SHOP_ID=acme
+SHOPWARE_DEPLOY_ENV=live
+IMAGE=ghcr.io/fyrst-dev/acme
+IMAGE_TAG=deadbeef
+",
+    )
+    .unwrap();
+    shop.write_vps_compose();
+    let out = release(shop.path(), &["--dry-run"], &[]);
+    assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("DEPLOY_HEALTH_URL"), "{err}");
+    assert!(err.contains("APP_URL"), "{err}");
+    assert!(err.contains("--allow-no-deploy-health"), "{err}");
+    assert!(!shop.path().join(".previous-tag").is_file());
+}
+
+#[test]
+fn live_smoke_url_alone_does_not_satisfy_require() {
+    let shop = TempShop::new("live-smoke-only");
+    fs::write(
+        shop.path().join(".env"),
+        "\
+SHOPWARE_SHOP_ID=acme
+SHOPWARE_DEPLOY_ENV=live
+IMAGE=ghcr.io/fyrst-dev/acme
+IMAGE_TAG=deadbeef
+SMOKE_URL=http://127.0.0.1:8000
+",
+    )
+    .unwrap();
+    shop.write_vps_compose();
+    let out = release(shop.path(), &["--dry-run"], &[]);
+    assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("DEPLOY_HEALTH_URL"), "{err}");
+    assert!(!err.contains("http://127.0.0.1:8000"), "{err}");
+}
+
+#[test]
+fn live_whitespace_app_url_does_not_satisfy_require() {
+    let shop = TempShop::new("live-ws-app");
+    fs::write(
+        shop.path().join(".env"),
+        "\
+SHOPWARE_SHOP_ID=acme
+SHOPWARE_DEPLOY_ENV=live
+IMAGE=ghcr.io/fyrst-dev/acme
+IMAGE_TAG=deadbeef
+",
+    )
+    .unwrap();
+    shop.write_vps_compose();
+    let out = release(shop.path(), &["--dry-run"], &[("APP_URL", "   ")]);
+    assert_eq!(out.status.code(), Some(1), "stderr={}", stderr(&out));
+    assert!(
+        stderr(&out).contains("Live deploy requires"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn live_allow_no_deploy_health_flag_skips_probe() {
+    let shop = TempShop::new("live-hatch-flag");
+    fs::write(
+        shop.path().join(".env"),
+        "\
+SHOPWARE_SHOP_ID=acme
+SHOPWARE_DEPLOY_ENV=live
+IMAGE=ghcr.io/fyrst-dev/acme
+IMAGE_TAG=deadbeef
+",
+    )
+    .unwrap();
+    shop.write_vps_compose();
+    let out = release(shop.path(), &["--dry-run", "--allow-no-deploy-health"], &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    let all = combined(&out);
+    assert!(all.contains("ops escape only"), "{all}");
+    assert!(
+        !stdout(&out).contains("DRY-RUN would GET"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn live_allow_no_deploy_health_env_skips_probe() {
+    let shop = TempShop::new("live-hatch-env");
+    fs::write(
+        shop.path().join(".env"),
+        "\
+SHOPWARE_SHOP_ID=acme
+SHOPWARE_DEPLOY_ENV=live
+IMAGE=ghcr.io/fyrst-dev/acme
+IMAGE_TAG=deadbeef
+",
+    )
+    .unwrap();
+    shop.write_vps_compose();
+    let out = release(
+        shop.path(),
+        &["--dry-run"],
+        &[("ALLOW_NO_DEPLOY_HEALTH", "1")],
+    );
+    assert_eq!(out.status.code(), Some(0), "stderr={}", stderr(&out));
+    assert!(
+        combined(&out).contains("ALLOW_NO_DEPLOY_HEALTH"),
+        "{}",
+        combined(&out)
+    );
 }

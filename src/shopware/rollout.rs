@@ -15,13 +15,20 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-pub const SMOKE_ATTEMPTS: u32 = 30;
-pub const SMOKE_SLEEP: Duration = Duration::from_secs(2);
+pub const DEPLOY_HEALTH_ATTEMPTS: u32 = 30;
+pub const DEPLOY_HEALTH_SLEEP: Duration = Duration::from_secs(2);
+/// Shopware Core health path (same as compose container healthcheck).
+pub const DEPLOY_HEALTH_PATH: &str = "/api/_info/health-check";
 
-/// Operator one-liner printed on smoke failure (fyrst-cli equivalent of overlay
+/// Operator one-liner printed on deploy-health failure (fyrst-cli equivalent of overlay
 /// `IMAGE_TAG=$(cat .previous-tag) bash deploy/vps-rollback.sh`).
 pub const ROLLBACK_ONE_LINER: &str =
     "IMAGE_TAG=$(cat .previous-tag) fyrst-cli shopware deploy rollback";
+
+const LIVE_DEPLOY_HEALTH_REQUIRED: &str = "\
+Live deploy requires a post-deploy health probe. Set DEPLOY_HEALTH_URL (full URL) \
+or APP_URL (probe is APP_URL with trailing slash stripped + /api/_info/health-check). \
+Ops escape only: --allow-no-deploy-health or ALLOW_NO_DEPLOY_HEALTH=1.";
 
 pub fn env_truthy(v: &str) -> bool {
     matches!(
@@ -74,7 +81,51 @@ pub fn parse_profiles(raw: Option<&str>) -> Result<Vec<String>, Error> {
     Ok(out)
 }
 
-/// `ROLLBACK_ON_SMOKE_FAIL`: explicit 1/0 wins. Unset → on for live, off otherwise.
+fn trimmed_non_empty(v: Option<&str>) -> Option<&str> {
+    v.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Join `APP_URL` to the Shopware Core health path. Trailing slashes on the
+/// base are stripped. Empty / whitespace-only `APP_URL` cannot produce a URL.
+pub fn deploy_health_url_from_app_url(app_url: &str) -> Option<String> {
+    let base = app_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        None
+    } else {
+        Some(format!("{base}{DEPLOY_HEALTH_PATH}"))
+    }
+}
+
+/// Resolved post-deploy probe: `DEPLOY_HEALTH_URL` as-is, else `APP_URL` +
+/// `/api/_info/health-check`. `SMOKE_URL` is not read.
+pub fn resolve_deploy_health_probe(
+    deploy_health_url: Option<&str>,
+    app_url: Option<&str>,
+) -> Option<String> {
+    if let Some(url) = trimmed_non_empty(deploy_health_url) {
+        return Some(url.to_string());
+    }
+    trimmed_non_empty(app_url).and_then(deploy_health_url_from_app_url)
+}
+
+pub fn live_deploy_health_required(deploy_env: &str) -> bool {
+    deploy_env.eq_ignore_ascii_case("live")
+}
+
+/// Live must have a probe URL unless the ops escape hatch is set.
+pub fn refuse_live_without_deploy_health(
+    deploy_env: &str,
+    url: Option<&str>,
+    allow_no: bool,
+) -> Result<(), Error> {
+    if url.is_some() || !live_deploy_health_required(deploy_env) || allow_no {
+        Ok(())
+    } else {
+        Err(Error::fail(LIVE_DEPLOY_HEALTH_REQUIRED))
+    }
+}
+
+/// `ROLLBACK_ON_FAIL`: explicit 1/0 wins. Unset → on for live, off otherwise.
 pub fn should_auto_rollback(flag: Option<&str>, deploy_env: &str) -> bool {
     if let Some(f) = flag.filter(|s| !s.is_empty()) {
         if env_truthy(f) {
@@ -229,10 +280,10 @@ pub struct VpsContext {
     pub data_root: String,
     pub profiles: Vec<String>,
     pub profiles_raw: String,
-    pub smoke_url: Option<String>,
+    pub deploy_health_url: Option<String>,
     pub pull_policy: String,
     pub skip_pull: bool,
-    pub rollback_on_smoke_fail: Option<String>,
+    pub rollback_on_fail: Option<String>,
     pub dry_run: bool,
     pub notes: Vec<String>,
     pub warnings: Vec<String>,
@@ -275,7 +326,7 @@ impl VpsContext {
     }
 
     pub fn should_auto_rollback(&self) -> bool {
-        should_auto_rollback(self.rollback_on_smoke_fail.as_deref(), &self.deploy_env)
+        should_auto_rollback(self.rollback_on_fail.as_deref(), &self.deploy_env)
     }
 
     pub fn log_contains_secret(&self, text: &str) -> bool {
@@ -322,8 +373,29 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
         Some(profiles_raw.as_str())
     })?;
 
+    let deploy_health_url =
+        resolve_deploy_health_probe(env.get("DEPLOY_HEALTH_URL"), env.get("APP_URL"));
+    let allow_no_deploy_health = env
+        .get("ALLOW_NO_DEPLOY_HEALTH")
+        .map(env_truthy)
+        .unwrap_or(false);
+    refuse_live_without_deploy_health(
+        &deploy_env,
+        deploy_health_url.as_deref(),
+        allow_no_deploy_health,
+    )?;
+
     let mut notes = Vec::new();
-    let warnings = live_empty_profiles_warnings(&deploy_env, env.get("COMPOSE_PROFILES"));
+    let mut warnings = live_empty_profiles_warnings(&deploy_env, env.get("COMPOSE_PROFILES"));
+    if deploy_health_url.is_none()
+        && live_deploy_health_required(&deploy_env)
+        && allow_no_deploy_health
+    {
+        warnings.push(
+            "--allow-no-deploy-health / ALLOW_NO_DEPLOY_HEALTH=1 — skipping live post-deploy health probe (ops escape only)."
+                .into(),
+        );
+    }
     if let Some(from_env) = env.get("COMPOSE_PROJECT_NAME") {
         if from_env != compose_project_name {
             notes.push(format!(
@@ -361,10 +433,10 @@ pub fn bootstrap(env: &ShopEnv, skip_pull_flag: bool, dry_run: bool) -> Result<V
         data_root,
         profiles,
         profiles_raw,
-        smoke_url: env.get("SMOKE_URL").map(str::to_string),
+        deploy_health_url,
         pull_policy,
         skip_pull,
-        rollback_on_smoke_fail: env.get("ROLLBACK_ON_SMOKE_FAIL").map(str::to_string),
+        rollback_on_fail: env.get("ROLLBACK_ON_FAIL").map(str::to_string),
         dry_run,
         notes,
         warnings,
@@ -439,11 +511,11 @@ pub fn execute_rollout(ctx: &VpsContext, plan: &RolloutPlan) -> Result<(), Error
     Ok(())
 }
 
-pub fn smoke(ctx: &VpsContext) -> Result<(), Error> {
-    let Some(url) = ctx.smoke_url.as_deref() else {
+pub fn deploy_health(ctx: &VpsContext) -> Result<(), Error> {
+    let Some(url) = ctx.deploy_health_url.as_deref() else {
         return Ok(());
     };
-    println!("==> Smoke {url}");
+    println!("==> Deploy health {url}");
     if ctx.dry_run {
         println!("==> DRY-RUN would GET {url}");
         return Ok(());
@@ -457,10 +529,10 @@ pub fn smoke(ctx: &VpsContext) -> Result<(), Error> {
         .unwrap_or(false);
     if !curl_ok {
         return Err(Error::fail(format!(
-            "Smoke check failed for {url}: curl is not available"
+            "Deploy health check failed for {url}: curl is not available"
         )));
     }
-    for _ in 0..SMOKE_ATTEMPTS {
+    for _ in 0..DEPLOY_HEALTH_ATTEMPTS {
         let ok = Command::new("curl")
             .args(["-fsS", url])
             .stdout(Stdio::null())
@@ -469,16 +541,16 @@ pub fn smoke(ctx: &VpsContext) -> Result<(), Error> {
             .map(|s| s.success())
             .unwrap_or(false);
         if ok {
-            println!("==> Smoke OK");
+            println!("==> Deploy health OK");
             return Ok(());
         }
-        thread::sleep(SMOKE_SLEEP);
+        thread::sleep(DEPLOY_HEALTH_SLEEP);
     }
-    Err(Error::fail(format!("Smoke check failed for {url}")))
+    Err(Error::fail(format!("Deploy health check failed for {url}")))
 }
 
-pub fn smoke_fail_message(url: &str) -> String {
-    format!("Smoke check failed for {url}\nERROR: Rollback command: {ROLLBACK_ONE_LINER}")
+pub fn deploy_health_fail_message(url: &str) -> String {
+    format!("Deploy health check failed for {url}\nERROR: Rollback command: {ROLLBACK_ONE_LINER}")
 }
 
 /// Re-run the same compose order at `image_tag` (release auto-rollback).
@@ -487,7 +559,7 @@ pub fn rollout_to_tag(ctx: &mut VpsContext, image_tag: String) -> Result<(), Err
     ctx.image_tag = image_tag;
     let plan = ctx.plan();
     execute_rollout(ctx, &plan)?;
-    smoke(ctx)?;
+    deploy_health(ctx)?;
     write_tag_file(&ctx.compose_dir.join(".deployed-tag"), &ctx.image_tag)?;
     Ok(())
 }
@@ -586,6 +658,32 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_reads_rollback_on_fail_not_old_name() {
+        let shop = TempShop::new("rb-old");
+        write_vps_files(&shop.0);
+        write_boot_env(
+            &shop.0,
+            "SHOPWARE_DEPLOY_ENV=live\nAPP_URL=https://shop.example.com/\nROLLBACK_ON_SMOKE_FAIL=0\n",
+        );
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let ctx = bootstrap(&env, false, true).unwrap();
+        assert!(
+            ctx.should_auto_rollback(),
+            "old ROLLBACK_ON_SMOKE_FAIL must not disable live default"
+        );
+
+        let shop = TempShop::new("rb-new");
+        write_vps_files(&shop.0);
+        write_boot_env(
+            &shop.0,
+            "SHOPWARE_DEPLOY_ENV=live\nAPP_URL=https://shop.example.com/\nROLLBACK_ON_FAIL=0\n",
+        );
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let ctx = bootstrap(&env, false, true).unwrap();
+        assert!(!ctx.should_auto_rollback());
+    }
+
+    #[test]
     fn live_empty_profiles_warns() {
         let w = live_empty_profiles_warnings("live", None);
         assert!(w
@@ -596,12 +694,80 @@ mod tests {
     }
 
     #[test]
-    fn smoke_fail_prints_rollback_one_liner() {
-        let m = smoke_fail_message("http://127.0.0.1:8000");
+    fn deploy_health_fail_prints_rollback_one_liner() {
+        let m = deploy_health_fail_message("http://127.0.0.1:8000");
         assert!(m.contains("http://127.0.0.1:8000"), "{m}");
         assert!(m.contains(ROLLBACK_ONE_LINER), "{m}");
         assert!(m.contains("fyrst-cli shopware deploy rollback"), "{m}");
+        assert!(m.contains("Deploy health check failed"), "{m}");
         assert!(!m.contains("DATABASE_URL"), "{m}");
+    }
+
+    #[test]
+    fn app_url_trailing_slash_joins_health_path() {
+        assert_eq!(
+            deploy_health_url_from_app_url("https://shop.example.com"),
+            Some("https://shop.example.com/api/_info/health-check".into())
+        );
+        assert_eq!(
+            deploy_health_url_from_app_url("https://shop.example.com/"),
+            Some("https://shop.example.com/api/_info/health-check".into())
+        );
+        assert_eq!(
+            deploy_health_url_from_app_url("https://shop.example.com///"),
+            Some("https://shop.example.com/api/_info/health-check".into())
+        );
+        assert_eq!(
+            deploy_health_url_from_app_url("  https://shop.example.com/  "),
+            Some("https://shop.example.com/api/_info/health-check".into())
+        );
+        assert_eq!(deploy_health_url_from_app_url(""), None);
+        assert_eq!(deploy_health_url_from_app_url("   "), None);
+        assert_eq!(deploy_health_url_from_app_url("/"), None);
+    }
+
+    #[test]
+    fn resolve_prefers_deploy_health_url_then_app_url() {
+        assert_eq!(
+            resolve_deploy_health_probe(
+                Some("http://127.0.0.1:8000/api/_info/health-check"),
+                Some("https://shop.example.com/"),
+            )
+            .as_deref(),
+            Some("http://127.0.0.1:8000/api/_info/health-check")
+        );
+        assert_eq!(
+            resolve_deploy_health_probe(None, Some("https://shop.example.com/")).as_deref(),
+            Some("https://shop.example.com/api/_info/health-check")
+        );
+        assert_eq!(
+            resolve_deploy_health_probe(Some("  "), Some("   ")).as_deref(),
+            None
+        );
+        assert!(resolve_deploy_health_probe(None, None).is_none());
+    }
+
+    #[test]
+    fn live_refuses_without_probe_unless_escape_hatch() {
+        let err = refuse_live_without_deploy_health("live", None, false).unwrap_err();
+        assert!(err.to_string().contains("DEPLOY_HEALTH_URL"), "{err}");
+        assert!(err.to_string().contains("APP_URL"), "{err}");
+        assert!(
+            err.to_string().contains("--allow-no-deploy-health"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("ALLOW_NO_DEPLOY_HEALTH"), "{err}");
+
+        assert!(refuse_live_without_deploy_health("LIVE", None, false).is_err());
+        assert!(refuse_live_without_deploy_health("live", None, true).is_ok());
+        assert!(refuse_live_without_deploy_health(
+            "live",
+            Some("http://127.0.0.1:8000/api/_info/health-check"),
+            false
+        )
+        .is_ok());
+        assert!(refuse_live_without_deploy_health("staging", None, false).is_ok());
+        assert!(refuse_live_without_deploy_health("dev", None, false).is_ok());
     }
 
     #[test]
@@ -706,6 +872,171 @@ DATABASE_URL=mysql://alice:s3cret-value@db.example.com/shop
         assert!(!ctx.log_contains_secret(&web));
         assert!(!web.contains("s3cret-value"));
         assert!(!web.contains("super-secret-pass"));
+        assert!(ctx.deploy_health_url.is_none());
+    }
+
+    fn write_boot_env(shop: &Path, extra: &str) {
+        fs::write(
+            shop.join(".env"),
+            format!(
+                "\
+SHOPWARE_SHOP_ID=acme
+IMAGE=ghcr.io/file/shop
+IMAGE_TAG=latest
+{extra}"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bootstrap_app_url_trailing_slash_becomes_health_path() {
+        let shop = TempShop::new("app-url-join");
+        write_vps_files(&shop.0);
+        write_boot_env(
+            &shop.0,
+            "SHOPWARE_DEPLOY_ENV=staging\nAPP_URL=https://shop.example.com/\n",
+        );
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let ctx = bootstrap(&env, false, true).unwrap();
+        assert_eq!(
+            ctx.deploy_health_url.as_deref(),
+            Some("https://shop.example.com/api/_info/health-check")
+        );
+    }
+
+    #[test]
+    fn bootstrap_smoke_url_does_not_drive_probe() {
+        let shop = TempShop::new("smoke-ignored");
+        write_vps_files(&shop.0);
+        write_boot_env(
+            &shop.0,
+            "SHOPWARE_DEPLOY_ENV=staging\nSMOKE_URL=http://127.0.0.1:8000\n",
+        );
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let ctx = bootstrap(&env, false, true).unwrap();
+        assert!(ctx.deploy_health_url.is_none());
+        assert!(!ctx.notes.iter().any(|n| n.contains("SMOKE_URL")));
+
+        let shop = TempShop::new("smoke-ignored-app");
+        write_vps_files(&shop.0);
+        write_boot_env(
+            &shop.0,
+            "SHOPWARE_DEPLOY_ENV=staging\nSMOKE_URL=http://127.0.0.1:8000\nAPP_URL=https://shop.example.com/\n",
+        );
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let ctx = bootstrap(&env, false, true).unwrap();
+        assert_eq!(
+            ctx.deploy_health_url.as_deref(),
+            Some("https://shop.example.com/api/_info/health-check")
+        );
+    }
+
+    #[test]
+    fn bootstrap_live_smoke_url_alone_does_not_satisfy_require() {
+        let shop = TempShop::new("live-smoke-only");
+        write_vps_files(&shop.0);
+        write_boot_env(
+            &shop.0,
+            "SHOPWARE_DEPLOY_ENV=live\nSMOKE_URL=http://127.0.0.1:8000\n",
+        );
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let err = match bootstrap(&env, false, true) {
+            Err(e) => e,
+            Ok(_) => panic!("SMOKE_URL must not satisfy the live health require"),
+        };
+        assert!(err.to_string().contains("DEPLOY_HEALTH_URL"), "{err}");
+    }
+
+    #[test]
+    fn bootstrap_deploy_health_url_used_as_is() {
+        let shop = TempShop::new("health-override");
+        write_vps_files(&shop.0);
+        write_boot_env(
+            &shop.0,
+            "SHOPWARE_DEPLOY_ENV=live\nDEPLOY_HEALTH_URL=http://127.0.0.1:8000/api/_info/health-check\nAPP_URL=https://shop.example.com/\nSMOKE_URL=http://ignored\n",
+        );
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let ctx = bootstrap(&env, false, true).unwrap();
+        assert_eq!(
+            ctx.deploy_health_url.as_deref(),
+            Some("http://127.0.0.1:8000/api/_info/health-check")
+        );
+    }
+
+    #[test]
+    fn bootstrap_live_refuses_without_probe_url() {
+        let shop = TempShop::new("live-no-health");
+        write_vps_files(&shop.0);
+        write_boot_env(&shop.0, "SHOPWARE_DEPLOY_ENV=live\n");
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let err = match bootstrap(&env, false, true) {
+            Err(e) => e,
+            Ok(_) => panic!("expected live refuse without probe URL"),
+        };
+        assert!(err.to_string().contains("DEPLOY_HEALTH_URL"), "{err}");
+        assert!(
+            err.to_string().contains("--allow-no-deploy-health"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn bootstrap_live_empty_and_whitespace_app_url_refuse() {
+        let shop = TempShop::new("live-empty-app");
+        write_vps_files(&shop.0);
+        write_boot_env(&shop.0, "SHOPWARE_DEPLOY_ENV=live\nAPP_URL=\n");
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        assert!(env.get("APP_URL").is_none());
+        let err = match bootstrap(&env, false, true) {
+            Err(e) => e,
+            Ok(_) => panic!("expected live refuse without probe URL"),
+        };
+        assert!(err.to_string().contains("Live deploy requires"), "{err}");
+
+        // File parser trims values, so APP_URL=<spaces> in a file is empty.
+        // Process-env whitespace is non-empty for ShopEnv::get / PROCESS_WINS
+        // but must not produce a probe URL (and must not satisfy live require).
+        let shop = TempShop::new("live-ws-app");
+        write_vps_files(&shop.0);
+        write_boot_env(&shop.0, "SHOPWARE_DEPLOY_ENV=live\n");
+        let mut process = HashMap::new();
+        process.insert("APP_URL".into(), "   ".into());
+        let env = ShopEnv::load(shop.0.clone(), &process).unwrap();
+        assert_eq!(env.get("APP_URL"), Some("   "));
+        let err = match bootstrap(&env, false, true) {
+            Err(e) => e,
+            Ok(_) => panic!("expected live refuse without probe URL"),
+        };
+        assert!(err.to_string().contains("Live deploy requires"), "{err}");
+    }
+
+    #[test]
+    fn bootstrap_live_escape_hatch_skips_probe() {
+        let shop = TempShop::new("live-hatch");
+        write_vps_files(&shop.0);
+        write_boot_env(
+            &shop.0,
+            "SHOPWARE_DEPLOY_ENV=live\nALLOW_NO_DEPLOY_HEALTH=1\n",
+        );
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let ctx = bootstrap(&env, false, true).unwrap();
+        assert!(ctx.deploy_health_url.is_none());
+        assert!(ctx
+            .warnings
+            .iter()
+            .any(|w| w.contains("ops escape only") && w.contains("ALLOW_NO_DEPLOY_HEALTH")));
+    }
+
+    #[test]
+    fn bootstrap_staging_skips_probe_without_url() {
+        let shop = TempShop::new("staging-skip");
+        write_vps_files(&shop.0);
+        write_boot_env(&shop.0, "SHOPWARE_DEPLOY_ENV=staging\n");
+        let env = ShopEnv::load(shop.0.clone(), &HashMap::new()).unwrap();
+        let ctx = bootstrap(&env, false, true).unwrap();
+        assert!(ctx.deploy_health_url.is_none());
+        assert!(!ctx.warnings.iter().any(|w| w.contains("ops escape")));
     }
 
     #[test]

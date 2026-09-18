@@ -2,14 +2,14 @@
 //!
 //! `IMAGE` stays from env / `.env`. `IMAGE_TAG` is **only** `.previous-tag`
 //! (process-env `IMAGE_TAG` is ignored). Reuses the release compose/rollout
-//! helper. Writes `.deployed-tag` only after a successful rollout (and smoke,
-//! if set).
+//! helper. Writes `.deployed-tag` only after a successful rollout (and deploy
+//! health probe, if set).
 
 use super::env::{resolve_compose_dir, ShopEnv};
 use super::error::Error;
 use super::mysql::require_docker;
 use super::rollout::{
-    bootstrap, docker_log_checked, ensure_env_prod, execute_rollout, read_tag_file, smoke,
+    bootstrap, deploy_health, docker_log_checked, ensure_env_prod, execute_rollout, read_tag_file,
     write_tag_file, VpsContext,
 };
 use crate::cli::RollbackArgs;
@@ -21,6 +21,9 @@ pub fn run(args: RollbackArgs) -> Result<(), Error> {
     let mut process: HashMap<String, String> = std::env::vars().collect();
     if args.skip_pull {
         process.insert("SKIP_PULL".into(), "1".into());
+    }
+    if args.allow_no_deploy_health {
+        process.insert("ALLOW_NO_DEPLOY_HEALTH".into(), "1".into());
     }
     let cwd = std::env::current_dir().map_err(|e| Error::fail(format!("cannot read cwd: {e}")))?;
     execute_rollback(&process, &cwd, args.skip_pull, args.dry_run)
@@ -76,7 +79,7 @@ pub fn execute_rollback(
 
     if dry_run {
         print_dry_run(&ctx, &plan)?;
-        if let Some(url) = &ctx.smoke_url {
+        if let Some(url) = &ctx.deploy_health_url {
             emit(&ctx, format!("==> DRY-RUN would GET {url}"))?;
         }
         emit(
@@ -93,10 +96,13 @@ pub fn execute_rollback(
     require_docker()?;
     execute_rollout(&ctx, &plan)?;
 
-    if let Err(_e) = smoke(&ctx) {
-        let url = ctx.smoke_url.as_deref().unwrap_or("SMOKE_URL");
+    if let Err(_e) = deploy_health(&ctx) {
+        let url = ctx
+            .deploy_health_url
+            .as_deref()
+            .unwrap_or("DEPLOY_HEALTH_URL");
         return Err(Error::fail(format!(
-            "Smoke check failed for {url} after rollback. Stack is on {}:{} but .deployed-tag was not updated",
+            "Deploy health check failed for {url} after rollback. Stack is on {}:{} but .deployed-tag was not updated",
             ctx.image, ctx.image_tag
         )));
     }

@@ -30,8 +30,8 @@ those scripts. Use the CLI column.
 | Historical overlay (removed) | CLI | Nested verbs | Flags | Status |
 | --- | --- | --- | --- | --- |
 | `deploy/init-env.sh` | `fyrst-cli shopware env init` | `init` | `--shop-id`, `--env`, `--image`, `--dry-run` | **implemented** |
-| `deploy/vps-release.sh` | `fyrst-cli shopware deploy release` | `release` | `--dry-run`, `--skip-pull` | **implemented** |
-| `deploy/vps-rollback.sh` | `fyrst-cli shopware deploy rollback` | `rollback` | `--dry-run`, `--skip-pull` | **implemented** |
+| `deploy/vps-release.sh` | `fyrst-cli shopware deploy release` | `release` | `--dry-run`, `--skip-pull`, `--allow-no-deploy-health` | **implemented** |
+| `deploy/vps-rollback.sh` | `fyrst-cli shopware deploy rollback` | `rollback` | `--dry-run`, `--skip-pull`, `--allow-no-deploy-health` | **implemented** |
 | `restore_db_*` (sync-runtime) | `fyrst-cli shopware db import` | `import` | `--file`, `--dry-run`, `--allow-live` | **implemented** |
 | `deploy/sync-runtime.sh` snapshot | `fyrst-cli shopware sync capture` | `capture` | `--from`, `--data`, `--snapshot-dir`, `--dry-run`, `--skip-db`, `--skip-volumes` | **volumes implemented** (bind-mount trees → `--snapshot-dir/data/<item>/`; named-volume tar fallback). **Not a dump command:** `--data db` exits 2 and tells operators to run `shopware-cli project dump` |
 | `deploy/sync-runtime.sh` restore | `fyrst-cli shopware sync apply` | `apply` | same flags | **implemented**: DB via same import module; bind-mount volumes from `data/<item>/` or `volumes/<item>.tar.gz`; stop/start `web`/`worker`/`scheduler`; rewrite from `APP_URL` via compose `web`; live refuse unless `SHOPWARE_ALLOW_LIVE_RESTORE=1`; rewrite skipped on live |
@@ -59,6 +59,7 @@ for apply, pull, import, and backup recover (also in `shopware --help`).
 | `sync apply` | `SHOPWARE_ALLOW_LIVE_RESTORE=1` only |
 | `sync pull` | `SHOPWARE_ALLOW_LIVE_RESTORE=1` only |
 | `backup recover` | confirm flag (`--i-understand-this-restores-this-host` or `BACKUP_CONFIRM_RESTORE=1`) **and** `SHOPWARE_ALLOW_LIVE_RESTORE=1` when `SHOPWARE_DEPLOY_ENV=live` |
+| `deploy release` / `deploy rollback` | post-deploy health probe required (`DEPLOY_HEALTH_URL` or `APP_URL`). Ops escape: `--allow-no-deploy-health` or `ALLOW_NO_DEPLOY_HEALTH=1` |
 
 URL rewrite after apply uses `APP_URL` and is **skipped** on live (never
 applied). Staging / playground / dev need no extra live flag for backup
@@ -96,7 +97,7 @@ fyrst-cli shopware env init [--shop-id SLUG] [--env live|staging|playground|dev]
 ## Exact deploy release CLI
 
 ```text
-fyrst-cli shopware deploy release [--dry-run] [--skip-pull]
+fyrst-cli shopware deploy release [--dry-run] [--skip-pull] [--allow-no-deploy-health]
 ```
 
 ## `shopware deploy release` (implemented)
@@ -125,11 +126,16 @@ compile flags stay in the setup helper image.
 4. One-shot `--profile setup run --rm --pull never setup`.
 5. `up -d --no-build` (optional `--pull never`) `--remove-orphans web`.
 6. Extra `COMPOSE_PROFILES` (must not include `setup`).
-7. Optional `SMOKE_URL` (curl, 30 attempts). Write `.deployed-tag` only after
-   setup/web succeed and smoke passes.
-8. On smoke failure: print
+7. Post-deploy health probe (`curl -fsS`, 30 attempts, 2s sleep). Default URL:
+   `APP_URL` with trailing slash stripped + `/api/_info/health-check`. Override
+   with `DEPLOY_HEALTH_URL` (full URL, used as-is). Write `.deployed-tag` only after
+   setup/web succeed and the probe passes (or is skipped).
+   Live (`SHOPWARE_DEPLOY_ENV=live`) **requires** a probe URL; refuse before
+   mutating unless `--allow-no-deploy-health` / `ALLOW_NO_DEPLOY_HEALTH=1` (ops
+   escape only). Non-live skips the probe when no URL can be resolved.
+8. On deploy-health failure: print
    `IMAGE_TAG=$(cat .previous-tag) fyrst-cli shopware deploy rollback`. Auto-run the
-   shared rollout helper at the previous tag when `ROLLBACK_ON_SMOKE_FAIL` is
+   shared rollout helper at the previous tag when `ROLLBACK_ON_FAIL` is
    on (unset → **on for live**, off otherwise). Release still **exits 1** after
    a successful auto-rollback. First deploy with no `.previous-tag` cannot
    auto-rollback.
@@ -140,8 +146,9 @@ compile flags stay in the setup helper image.
 Loud warning (does not auto-enable) when `SHOPWARE_DEPLOY_ENV=live` and
 `COMPOSE_PROFILES` is empty. Recommended live: `redis,worker,scheduler`.
 
-Passwords / `DATABASE_URL` are never logged. Auto-rollback on smoke uses the
-shared compose/rollout helper (`fyrst-cli shopware deploy rollback`).
+Passwords / `DATABASE_URL` are never logged. Auto-rollback on deploy-health
+failure uses the shared compose/rollout helper
+(`fyrst-cli shopware deploy rollback`).
 
 
 ## Exact import CLI
@@ -214,13 +221,13 @@ passwords).
 ## Exact deploy rollback CLI
 
 ```text
-fyrst-cli shopware deploy rollback [--dry-run] [--skip-pull]
+fyrst-cli shopware deploy rollback [--dry-run] [--skip-pull] [--allow-no-deploy-health]
 ```
 
 ## `shopware deploy rollback` (implemented)
 
 Resolves shop root (`COMPOSE_DIR` or walk from cwd for `.env` + `deploy/`),
-loads `.env` then `.env.local` then `.env.prod`. Process-env wins for `IMAGE`, `SMOKE_URL`,
+loads `.env` then `.env.local` then `.env.prod`. Process-env wins for `IMAGE`, `DEPLOY_HEALTH_URL`,
 `COMPOSE_PROFILES`, `SKIP_PULL`, `PULL_POLICY` when non-empty. **`IMAGE_TAG`
 from the process environment is ignored** — the only tag is shop-root
 `.previous-tag` (overlay `vps_read_previous_tag`). Missing or empty
@@ -239,8 +246,10 @@ Rollout order reuses the release compose/rollout helper (never `--build`;
 3. One-shot `compose --profile setup run --rm --pull never setup`.
 4. `up -d --no-build` (optional `--pull never`) `--remove-orphans web`.
 5. Extra `COMPOSE_PROFILES` (must not include `setup`).
-6. Optional `SMOKE_URL`. Write `.deployed-tag` **only after** success (and
-   smoke, if set). Smoke failure does not update `.deployed-tag`.
+6. Post-deploy health probe (same URL rules as release). Write `.deployed-tag`
+   **only after** success (and the probe, if a URL was resolved). Probe failure
+   does not update `.deployed-tag`. Live requires a probe URL unless the ops
+   escape `--allow-no-deploy-health` / `ALLOW_NO_DEPLOY_HEALTH=1` is set.
 
 `--dry-run` prints that sequence and does not pull or recreate containers.
 `--skip-pull` sets `PULL_POLICY=never` (same-host / air-gap).
@@ -586,8 +595,8 @@ This CLI reads shop identity and secrets from the environment / shop-root
 | Restore volumes | `SHOPWARE_DATA_ROOT`, `SHOPWARE_DATA_BASE` |
 | Rewrite | `APP_URL`, `IMAGE` |
 | Dump (shopware-cli only) | Use `shopware-cli project dump`. fyrst-cli does not dump. |
-| Release | `IMAGE`, `IMAGE_TAG` (release / `.env`; **ignored on rollback**), `COMPOSE_PROFILES`, `SMOKE_URL`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_SMOKE_FAIL` |
-| Rollback | `.previous-tag` is the only `IMAGE_TAG`; same optional env as release except `ROLLBACK_ON_SMOKE_FAIL` |
+| Release | `IMAGE`, `IMAGE_TAG` (release / `.env`; **ignored on rollback**), `COMPOSE_PROFILES`, `DEPLOY_HEALTH_URL` (default from `APP_URL` + `/api/_info/health-check`), `ALLOW_NO_DEPLOY_HEALTH`, `PULL_POLICY`, `SKIP_PULL`, `ROLLBACK_ON_FAIL` |
+| Rollback | `.previous-tag` is the only `IMAGE_TAG`; same optional env as release except `ROLLBACK_ON_FAIL` |
 | SSH / remote live data | `SHOPWARE_SSH_HOST`, `SHOPWARE_SSH_USER`, `SHOPWARE_SSH_KEY`, `SHOPWARE_REMOTE_DATA_ROOT` |
 | Live gate | `SHOPWARE_ALLOW_LIVE_RESTORE` |
 | Backup | `BACKUP_TARGET` (default `local`), `BACKUP_KEEP_DAYS` (default 14, `0` = forever), `BACKUP_DB_DUMP`, `BACKUP_CONFIRM_RESTORE` |

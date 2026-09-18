@@ -212,9 +212,17 @@ fyrst-cli shopware deploy rollback --dry-run
 fyrst-cli shopware deploy rollback --skip-pull
 ```
 
-On live smoke failure, release prints
+After a successful compose recreate, release/rollback GET a health URL
+(`curl -fsS`, 30 attempts, 2s sleep). Default probe: `APP_URL` with trailing
+slash stripped + `/api/_info/health-check`. Override with `DEPLOY_HEALTH_URL`
+(full URL, used as-is). Live (`SHOPWARE_DEPLOY_ENV=live`) requires a probe URL;
+ops escape only: `--allow-no-deploy-health` or `ALLOW_NO_DEPLOY_HEALTH=1`.
+Non-live skips the probe when no URL can be resolved.
+
+On live deploy-health failure, release prints
 `IMAGE_TAG=$(cat .previous-tag) fyrst-cli shopware deploy rollback` and may
-auto-rollback; it still exits 1. Live with empty `COMPOSE_PROFILES` warns
+auto-rollback (`ROLLBACK_ON_FAIL`; unset → on for live); it still
+exits 1. Live with empty `COMPOSE_PROFILES` warns
 (recommended: `redis,worker,scheduler`).
 
 ### sync capture / apply / pull / local
