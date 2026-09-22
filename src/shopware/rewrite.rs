@@ -1,7 +1,9 @@
-//! Sales-channel URL rewrite after restore.
+//! Sales-channel domain update after a non-live DB import.
 //!
-//! Target URL is `APP_URL`. On live, rewrite is skipped (APP_URL is a shop
-//! runtime var, not a restore opt-in — refusing it would block live DR).
+//! Shopware `sales-channel:update:domain` takes the new host. The host is
+//! parsed from `APP_URL` (scheme and path stripped; port is not passed).
+//! On live, the command is skipped (`APP_URL` is a shop runtime var, not a
+//! restore opt-in — refusing it would block live DR).
 
 use super::env::{existing_compose_files, ShopEnv};
 use super::error::Error;
@@ -9,6 +11,11 @@ use super::live::LiveSignals;
 use super::mysql::{compose_argv, compose_cli_log, require_docker};
 use std::path::Path;
 use std::process::Command;
+
+pub const DOMAIN_COMMAND: &str = "sales-channel:update:domain";
+
+/// Shown when the console command exits non-zero. Shopware ships this command.
+pub const UPDATE_DOMAIN_FAILED: &str = "sales-channel:update:domain failed.";
 
 pub fn rewrite_app_url(env: &ShopEnv) -> Option<&str> {
     env.get("APP_URL")
@@ -18,7 +25,7 @@ pub fn rewrite_requested(env: &ShopEnv) -> bool {
     rewrite_app_url(env).is_some()
 }
 
-/// Rewrite never runs on live. Returns Ok so restore/DR can continue.
+/// Domain update never runs on live. Returns Ok so restore/DR can continue.
 pub fn assert_not_live_rewrite(signals: &LiveSignals) -> Result<(), Error> {
     if !signals.is_live() {
         return Ok(());
@@ -30,30 +37,67 @@ pub fn should_rewrite(env: &ShopEnv, signals: &LiveSignals) -> bool {
     rewrite_requested(env) && !signals.is_live()
 }
 
-pub fn console_flag_args(env: &ShopEnv, checkout: &str, dry_run: bool) -> Vec<String> {
-    let mut args = Vec::new();
-    if let Some(url) = rewrite_app_url(env) {
-        args.push(format!("--app-url={url}"));
+/// Host argument for `sales-channel:update:domain`.
+///
+/// Scheme, userinfo, port, path, query, and fragment are not passed.
+/// `https://staging.example.com` and `https://staging.example.com:8443/en`
+/// both become `staging.example.com`.
+pub fn app_url_host(app_url: &str) -> Option<String> {
+    let url = app_url.trim();
+    if url.is_empty() {
+        return None;
     }
-    args.push(format!(
-        "--deploy-env={}",
-        env.get("SHOPWARE_DEPLOY_ENV").unwrap_or("")
-    ));
-    args.push(format!(
-        "--sync-env={}",
-        env.get("SHOPWARE_DEPLOY_ENV").unwrap_or("")
-    ));
-    args.push(format!("--checkout-basename={checkout}"));
-    if dry_run {
-        args.push("--dry-run".into());
+    let after_scheme = match url.split_once("://") {
+        Some((scheme, rest)) => {
+            if scheme.is_empty() || rest.is_empty() {
+                return None;
+            }
+            rest
+        }
+        None => url,
+    };
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return None;
     }
-    args
+    let authority = match authority.rsplit_once('@') {
+        Some((_, hostport)) => hostport,
+        None => authority,
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        let end = rest.find(']')?;
+        let host = &rest[..end];
+        if host.is_empty() {
+            return None;
+        }
+        host
+    } else {
+        match authority.split_once(':') {
+            Some((host, _)) => host,
+            None => authority,
+        }
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
 }
 
-pub fn compose_rewrite_args(env: &ShopEnv, compose_dir: &Path, dry_run: bool) -> Vec<String> {
-    let files = existing_compose_files(compose_dir);
-    let checkout = super::live::shop_basename(compose_dir);
-    let mut args = compose_argv(compose_dir, &files);
+pub fn domain_host(env: &ShopEnv) -> Result<String, Error> {
+    let url = rewrite_app_url(env)
+        .ok_or_else(|| Error::fail("APP_URL is unset; cannot run sales-channel:update:domain."))?;
+    app_url_host(url).ok_or_else(|| {
+        Error::fail(format!(
+            "APP_URL has no host for sales-channel:update:domain ({url}). The argument is the host only: scheme and path are stripped, and the port is not passed."
+        ))
+    })
+}
+
+fn push_domain_command(args: &mut Vec<String>, host: &str) {
     args.extend([
         "run".into(),
         "--rm".into(),
@@ -63,21 +107,26 @@ pub fn compose_rewrite_args(env: &ShopEnv, compose_dir: &Path, dry_run: bool) ->
         "php".into(),
         "web".into(),
         "bin/console".into(),
-        "fyrst:sales-channel:rewrite-urls".into(),
+        DOMAIN_COMMAND.into(),
     ]);
-    args.extend(console_flag_args(env, &checkout, dry_run));
-    args
+    args.push(host.to_string());
 }
 
-pub fn rewrite_log_line(env: &ShopEnv, compose_dir: &Path, dry_run: bool) -> String {
+pub fn compose_rewrite_args(env: &ShopEnv, compose_dir: &Path) -> Result<Vec<String>, Error> {
     let files = existing_compose_files(compose_dir);
-    let checkout = super::live::shop_basename(compose_dir);
-    let flags = console_flag_args(env, &checkout, dry_run);
-    format!(
-        "{} run --rm --pull never --entrypoint php web bin/console fyrst:sales-channel:rewrite-urls {}",
+    let host = domain_host(env)?;
+    let mut args = compose_argv(compose_dir, &files);
+    push_domain_command(&mut args, &host);
+    Ok(args)
+}
+
+pub fn rewrite_log_line(env: &ShopEnv, compose_dir: &Path) -> Result<String, Error> {
+    let files = existing_compose_files(compose_dir);
+    let host = domain_host(env)?;
+    Ok(format!(
+        "{} run --rm --pull never --entrypoint php web bin/console {DOMAIN_COMMAND} {host}",
         compose_cli_log(compose_dir, &files),
-        flags.join(" ")
-    )
+    ))
 }
 
 /// Names used by `shopware sync pull` (same predicates as restore).
@@ -117,30 +166,14 @@ pub fn maybe_rewrite(
         return Ok(());
     }
     println!(
-        "==> Sales_channel_domain rewrite via fyrst:sales-channel:rewrite-urls from APP_URL (sales channel domains only; media CDN / plugin configs / payment webhooks are not updated)"
+        "==> Sales_channel_domain rewrite via {DOMAIN_COMMAND} from APP_URL (sales channel domains only; media CDN / plugin configs / payment webhooks are not updated)"
     );
     if files.is_empty() {
         return Err(Error::fail(
-            "No compose files found under shop root; cannot run fyrst:sales-channel:rewrite-urls.",
+            "No compose files found under shop root; cannot run sales-channel:update:domain.",
         ));
     }
-    let checkout = super::live::shop_basename(compose_dir);
-    let args = {
-        let mut a = compose_argv(compose_dir, files);
-        a.extend([
-            "run".into(),
-            "--rm".into(),
-            "--pull".into(),
-            "never".into(),
-            "--entrypoint".into(),
-            "php".into(),
-            "web".into(),
-            "bin/console".into(),
-            "fyrst:sales-channel:rewrite-urls".into(),
-        ]);
-        a.extend(console_flag_args(env, &checkout, dry_run));
-        a
-    };
+    let args = compose_rewrite_args(env, compose_dir)?;
     if dry_run {
         println!("==> DRY-RUN docker {}", args.join(" "));
         return Ok(());
@@ -152,9 +185,7 @@ pub fn maybe_rewrite(
         .status()
         .map_err(|e| Error::fail(format!("could not exec docker compose rewrite: {e}")))?;
     if !status.success() {
-        return Err(Error::fail(
-            "fyrst:sales-channel:rewrite-urls failed. composer update fyrst/shopware-cd so the command and FyrstShopwareCdBundle exist, then composer recipes:update fyrst/shopware-cd.",
-        ));
+        return Err(Error::fail(UPDATE_DOMAIN_FAILED));
     }
     Ok(())
 }
@@ -174,6 +205,22 @@ mod tests {
         ShopEnv::from_vars(PathBuf::from("/shops/acme-staging"), vars)
     }
 
+    fn assert_no_legacy_flags(joined: &str) {
+        for gone in [
+            "--app-url",
+            "--deploy-env",
+            "--sync-env",
+            "--checkout-basename",
+            "--dry-run",
+            "--map",
+            "sales-channel:replace:url",
+            "fyrst:sales-channel:rewrite-urls",
+            "composer update fyrst/shopware-cd",
+        ] {
+            assert!(!joined.contains(gone), "{gone} in {joined}");
+        }
+    }
+
     #[test]
     fn requested_only_when_app_url_set() {
         assert!(!rewrite_requested(&env_from(&[])));
@@ -184,37 +231,66 @@ mod tests {
     }
 
     #[test]
-    fn console_args_omit_dry_run_when_off() {
-        let env = env_from(&[
-            ("APP_URL", "https://staging.example.com"),
-            ("SHOPWARE_DEPLOY_ENV", "staging"),
-        ]);
-        let args = console_flag_args(&env, "acme-staging", false);
-        let joined = args.join(" ");
-        assert!(!args.iter().any(|a| a == "--dry-run"), "{joined}");
-        assert!(
-            joined.contains("--app-url=https://staging.example.com"),
-            "{joined}"
+    fn host_strips_scheme_path_and_port() {
+        assert_eq!(
+            app_url_host("https://staging.example.com").as_deref(),
+            Some("staging.example.com")
         );
-        assert!(joined.contains("--deploy-env=staging"), "{joined}");
-        assert!(joined.contains("--sync-env=staging"), "{joined}");
-        assert!(
-            joined.contains("--checkout-basename=acme-staging"),
-            "{joined}"
+        assert_eq!(
+            app_url_host("https://staging.example.com/").as_deref(),
+            Some("staging.example.com")
         );
-        assert!(!joined.contains("--map="), "{joined}");
+        assert_eq!(
+            app_url_host("https://staging.example.com/de").as_deref(),
+            Some("staging.example.com")
+        );
+        assert_eq!(
+            app_url_host("https://staging.example.com:8443/en?x=1").as_deref(),
+            Some("staging.example.com")
+        );
+        assert_eq!(
+            app_url_host("http://localhost:8000").as_deref(),
+            Some("localhost")
+        );
+        assert_eq!(
+            app_url_host("https://user:pass@staging.example.com:8443/shop").as_deref(),
+            Some("staging.example.com")
+        );
+        assert_eq!(app_url_host("  ").as_deref(), None);
+        assert_eq!(app_url_host("https://").as_deref(), None);
     }
 
     #[test]
-    fn console_args_add_dry_run() {
-        let env = env_from(&[("APP_URL", "https://staging.example.com")]);
-        let args = console_flag_args(&env, "acme-staging", true);
+    fn console_args_are_command_plus_host_only() {
+        let env = env_from(&[
+            ("APP_URL", "https://staging.example.com:8443/de"),
+            ("SHOPWARE_DEPLOY_ENV", "staging"),
+        ]);
+        let args = compose_rewrite_args(&env, Path::new("/shops/acme-staging")).unwrap();
         let joined = args.join(" ");
-        assert!(args.iter().any(|a| a == "--dry-run"), "{joined}");
+        let cmd_at = args
+            .iter()
+            .position(|a| a == DOMAIN_COMMAND)
+            .expect(&joined);
+        assert!(cmd_at > 0, "{joined}");
+        assert_eq!(args[cmd_at - 1], "bin/console");
+        assert_eq!(args[cmd_at + 1], "staging.example.com");
+        assert_eq!(args.len(), cmd_at + 2, "{joined}");
         assert!(
-            joined.contains("--app-url=https://staging.example.com"),
+            joined.contains("run --rm --pull never --entrypoint php web bin/console"),
             "{joined}"
         );
+        assert!(!joined.contains(":8443"), "{joined}");
+        assert!(!joined.contains("https://"), "{joined}");
+        assert!(!joined.contains("/de"), "{joined}");
+        assert_no_legacy_flags(&joined);
+    }
+
+    #[test]
+    fn failure_text_does_not_ask_for_shopware_cd_update() {
+        assert!(!UPDATE_DOMAIN_FAILED.contains("composer update fyrst/shopware-cd"));
+        assert!(!UPDATE_DOMAIN_FAILED.contains("fyrst:sales-channel:rewrite-urls"));
+        assert!(UPDATE_DOMAIN_FAILED.contains(DOMAIN_COMMAND));
     }
 
     #[test]
@@ -225,8 +301,9 @@ mod tests {
             ("SHOPWARE_DEPLOY_ENV", "staging"),
             ("COMPOSE_PROJECT_NAME", "shopware-acme"),
         ]);
-        let line = rewrite_log_line(&env, Path::new("/shops/acme-staging"), true);
-        assert!(line.contains("fyrst:sales-channel:rewrite-urls"), "{line}");
+        let line = rewrite_log_line(&env, Path::new("/shops/acme-staging")).unwrap();
+        assert!(line.contains(DOMAIN_COMMAND), "{line}");
+        assert!(line.contains(" staging.example.com"), "{line}");
         assert!(
             line.contains("run --rm --pull never --entrypoint php"),
             "{line}"
@@ -239,15 +316,15 @@ mod tests {
             "{line}"
         );
         assert!(!line.contains("shopware-acme"), "{line}");
-        assert!(line.contains("--dry-run"), "{line}");
         assert!(
             !line.to_ascii_lowercase().contains("update sales_channel"),
             "{line}"
         );
-        let args = compose_rewrite_args(&env, Path::new("/shops/acme-staging"), false);
-        assert!(args.contains(&"fyrst:sales-channel:rewrite-urls".to_string()));
+        assert_no_legacy_flags(&line);
+        let args = compose_rewrite_args(&env, Path::new("/shops/acme-staging")).unwrap();
+        assert!(args.contains(&DOMAIN_COMMAND.to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("staging.example.com"));
         assert!(!args.iter().any(|a| a == "-p" || a == "--project-name"));
-        assert!(!args.iter().any(|a| a == "--dry-run"));
     }
 
     #[test]
@@ -270,11 +347,12 @@ mod tests {
             ("SHOPWARE_SHOP_ID", "acme"),
             ("SHOPWARE_DEPLOY_ENV", "staging"),
         ]);
-        let args = compose_rewrite_args(&env, &dir, false);
+        let args = compose_rewrite_args(&env, &dir).unwrap();
         assert!(args.windows(2).any(|w| w == ["--env-file", ".env"]));
         assert!(args.windows(2).any(|w| w == ["--env-file", ".env.local"]));
         assert!(args.windows(2).any(|w| w == ["-f", "deploy/compose.yaml"]));
         assert!(!args.iter().any(|a| a == "-p" || a == "--project-name"));
+        assert_eq!(args.last().map(String::as_str), Some("staging.example.com"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

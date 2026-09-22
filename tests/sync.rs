@@ -416,6 +416,8 @@ fn rewrite_skipped_on_live_even_with_allow() {
         "{}",
         stdout(&out)
     );
+    assert!(!all.contains("sales-channel:update:domain"), "{all}");
+    assert!(!all.contains("fyrst:sales-channel:rewrite-urls"), "{all}");
 }
 
 #[test]
@@ -452,6 +454,60 @@ fn rewrite_skipped_when_skip_db() {
     assert!(log.contains("db was skipped"), "{log}");
     assert!(log.contains("DRY-RUN rsync -az --delete"), "{log}");
     assert!(!log.contains("fyrst:sales-channel:rewrite-urls"), "{log}");
+    assert!(!log.contains("sales-channel:update:domain"), "{log}");
+}
+
+#[test]
+fn rewrite_dry_run_calls_native_domain_command() {
+    let shop = TempShop::new("rw-run");
+    shop.write_staging();
+    fs::write(
+        shop.path().join(".env"),
+        format!(
+            "{}\nAPP_URL=https://staging.example.com\n",
+            fs::read_to_string(shop.path().join(".env")).unwrap().trim()
+        ),
+    )
+    .unwrap();
+    fs::write(shop.path().join("var/runtime-sync/db.sql"), b"SELECT 1;\n").unwrap();
+    let out = sync_cmd(
+        shop.path(),
+        &[
+            "--dry-run",
+            "--from",
+            "live",
+            "--data",
+            "db",
+            "--skip-volumes",
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={} stdout={}",
+        stderr(&out),
+        stdout(&out)
+    );
+    let log = stdout(&out);
+    assert!(log.contains("sales-channel:update:domain"), "{log}");
+    assert!(log.contains(" staging.example.com"), "{log}");
+    assert!(
+        log.contains("run --rm --pull never --entrypoint php"),
+        "{log}"
+    );
+    assert!(!log.contains("https://staging.example.com"), "{log}");
+    assert!(!log.contains("fyrst:sales-channel:rewrite-urls"), "{log}");
+    assert!(!log.contains("--app-url"), "{log}");
+    assert!(!log.contains("--deploy-env"), "{log}");
+    assert!(!log.contains("--sync-env"), "{log}");
+    assert!(!log.contains("--checkout-basename"), "{log}");
+    assert!(!log.contains("sales-channel:replace:url"), "{log}");
+    assert!(!log.contains("composer update fyrst/shopware-cd"), "{log}");
+    assert!(
+        !combined(&out).contains("super-secret-pass"),
+        "{}",
+        combined(&out)
+    );
 }
 
 #[test]

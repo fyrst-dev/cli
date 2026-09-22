@@ -1,8 +1,9 @@
 //! `fyrst-cli shopware sync apply` — DB import plus bind-mount volumes and
-//! post-apply orchestration (stop/start, APP_URL rewrite, cache:clear hint).
+//! post-apply orchestration (stop/start, APP_URL domain update, cache:clear hint).
 //!
-//! Database import is the same module as `shopware db import`. Rewrite is
-//! `bin/console fyrst:sales-channel:rewrite-urls` via compose `web`, not SQL.
+//! Database import is the same module as `shopware db import`. Domain update is
+//! `bin/console sales-channel:update:domain <host>` via compose `web`, not SQL.
+//! `<host>` is parsed from `APP_URL` (scheme and path stripped; port is not passed).
 
 use super::data::{normalize_data, DataSelection};
 use super::env::{
@@ -17,7 +18,7 @@ use super::mysql::{
 };
 use super::rewrite::{
     compose_rewrite_args, rewrite_log_line, rewrite_requested, should_rewrite, skip_live_log,
-    skip_without_db_log,
+    skip_without_db_log, DOMAIN_COMMAND, UPDATE_DOMAIN_FAILED,
 };
 use super::volumes::{archive_image, execute_bind_restore, plan_bind_restore, VolumeRestore};
 use crate::cli::SyncOpArgs;
@@ -163,8 +164,8 @@ pub fn plan_with_env(
         RewriteAction::SkipNoDb
     } else {
         RewriteAction::Run {
-            docker_args: compose_rewrite_args(env, &compose_dir, dry_run),
-            log_line: rewrite_log_line(env, &compose_dir, dry_run),
+            docker_args: compose_rewrite_args(env, &compose_dir)?,
+            log_line: rewrite_log_line(env, &compose_dir)?,
         }
     };
 
@@ -238,7 +239,7 @@ pub fn execute(plan: &RestorePlan) -> Result<(), Error> {
             log_line,
         } => {
             println!(
-                "==> Opt-in sales_channel_domain rewrite via fyrst:sales-channel:rewrite-urls (sales channel domains only; media CDN / plugin configs / payment webhooks are not updated)"
+                "==> Opt-in sales_channel_domain rewrite via {DOMAIN_COMMAND} (sales channel domains only; media CDN / plugin configs / payment webhooks are not updated)"
             );
             if plan.log_contains_secret(log_line) {
                 return Err(Error::fail(
@@ -291,9 +292,7 @@ fn run_rewrite(compose_dir: &Path, docker_args: &[String]) -> Result<(), Error> 
     if status.success() {
         Ok(())
     } else {
-        Err(Error::fail(
-            "fyrst:sales-channel:rewrite-urls failed. composer update fyrst/shopware-cd so the command and FyrstShopwareCdBundle exist, then composer recipes:update fyrst/shopware-cd.",
-        ))
+        Err(Error::fail(UPDATE_DOMAIN_FAILED))
     }
 }
 
@@ -674,7 +673,7 @@ mod tests {
     fn rewrite_run_is_compose_console_when_db_restored() {
         let shop = TempShop::new("rewrun");
         shop.write_env(
-            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=staging\nAPP_URL=https://staging.example.com\nMYSQL_USER=u\nMYSQL_PASSWORD=s3cret-value\n",
+            "SHOPWARE_SHOP_ID=acme\nSHOPWARE_DEPLOY_ENV=staging\nAPP_URL=https://staging.example.com:8443/de\nMYSQL_USER=u\nMYSQL_PASSWORD=s3cret-value\n",
         );
         shop.write_compose_mysql();
         shop.write_dump();
@@ -685,16 +684,43 @@ mod tests {
                 docker_args,
             } => {
                 assert!(
-                    log_line.contains("fyrst:sales-channel:rewrite-urls"),
+                    log_line.contains("sales-channel:update:domain"),
                     "{log_line}"
                 );
+                assert!(log_line.contains(" staging.example.com"), "{log_line}");
                 assert!(
                     log_line.contains("run --rm --pull never --entrypoint php"),
                     "{log_line}"
                 );
-                assert!(log_line.contains("--dry-run"), "{log_line}");
                 assert!(!log_line.contains("s3cret-value"), "{log_line}");
-                assert!(docker_args.contains(&"fyrst:sales-channel:rewrite-urls".to_string()));
+                assert!(!log_line.contains(":8443"), "{log_line}");
+                assert!(!log_line.contains("/de"), "{log_line}");
+                assert!(!log_line.contains("https://"), "{log_line}");
+                for gone in [
+                    "--app-url",
+                    "--deploy-env",
+                    "--sync-env",
+                    "--checkout-basename",
+                    "--dry-run",
+                    "fyrst:sales-channel:rewrite-urls",
+                    "sales-channel:replace:url",
+                    "composer update fyrst/shopware-cd",
+                ] {
+                    assert!(!log_line.contains(gone), "{gone} in {log_line}");
+                    assert!(
+                        !docker_args.iter().any(|a| a.contains(gone)),
+                        "{gone} in {docker_args:?}"
+                    );
+                }
+                let cmd_at = docker_args
+                    .iter()
+                    .position(|a| a == "sales-channel:update:domain")
+                    .unwrap_or_else(|| panic!("{docker_args:?}"));
+                assert_eq!(
+                    docker_args.get(cmd_at + 1).map(String::as_str),
+                    Some("staging.example.com")
+                );
+                assert_eq!(docker_args.len(), cmd_at + 2);
                 assert!(!docker_args
                     .iter()
                     .any(|a| a == "-p" || a == "--project-name"));
