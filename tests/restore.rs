@@ -148,6 +148,7 @@ fn volume_dry_run_prints_rsync_plan() {
         "{log}"
     );
     assert!(!log.contains("fyrst:sales-channel:rewrite-urls"), "{log}");
+    assert!(!log.contains("sales-channel:update:domain"), "{log}");
 }
 
 #[test]
@@ -226,6 +227,10 @@ fn rewrite_skipped_when_skip_db() {
         !log.contains("fyrst:sales-channel:rewrite-urls"),
         "must not run rewrite when db skipped:\n{log}"
     );
+    assert!(
+        !log.contains("sales-channel:update:domain"),
+        "must not run domain update when db skipped:\n{log}"
+    );
 }
 
 #[test]
@@ -265,6 +270,10 @@ SHOPWARE_DATA_ROOT={}
         !log.contains("fyrst:sales-channel:rewrite-urls"),
         "must not run rewrite on live:\n{log}"
     );
+    assert!(
+        !log.contains("sales-channel:update:domain"),
+        "must not run domain update on live:\n{log}"
+    );
     let combined = format!("{log}{}", stderr(&out));
     assert!(!combined.contains("super-secret-pass"), "{combined}");
 }
@@ -282,15 +291,20 @@ fn rewrite_dry_run_is_compose_console() {
     let log = stdout(&out);
     let combined = format!("{log}{}", stderr(&out));
     assert!(!combined.contains("super-secret-pass"), "{combined}");
-    assert!(log.contains("fyrst:sales-channel:rewrite-urls"), "{log}");
+    assert!(log.contains("sales-channel:update:domain"), "{log}");
+    assert!(log.contains(" staging.example.com"), "{log}");
     assert!(
         log.contains("run --rm --pull never --entrypoint php"),
         "{log}"
     );
-    assert!(
-        log.contains("--app-url=https://staging.example.com"),
-        "{log}"
-    );
+    assert!(!log.contains("https://staging.example.com"), "{log}");
+    assert!(!log.contains("fyrst:sales-channel:rewrite-urls"), "{log}");
+    assert!(!log.contains("--app-url"), "{log}");
+    assert!(!log.contains("--deploy-env"), "{log}");
+    assert!(!log.contains("--sync-env"), "{log}");
+    assert!(!log.contains("--checkout-basename"), "{log}");
+    assert!(!log.contains("sales-channel:replace:url"), "{log}");
+    assert!(!log.contains("composer update fyrst/shopware-cd"), "{log}");
     assert!(
         !log.to_ascii_lowercase().contains("update sales_channel"),
         "{log}"

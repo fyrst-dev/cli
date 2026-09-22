@@ -130,7 +130,9 @@ hostname `live`) is refused by default.
 | `backup recover` | `--i-understand-this-restores-this-host` (or `BACKUP_CONFIRM_RESTORE=1`), **and** `SHOPWARE_ALLOW_LIVE_RESTORE=1` when `SHOPWARE_DEPLOY_ENV=live` |
 
 `backup create` / `backup prune` are allowed on live (that is the cron path).
-URL rewrite after apply uses `APP_URL` and is skipped on live. Passwords are
+URL rewrite after apply calls Shopware `sales-channel:update:domain` with the
+host from `APP_URL` (scheme and path stripped; port is not passed) and is
+skipped on live. Passwords are
 never printed.
 
 ## Usage
@@ -146,8 +148,9 @@ Identity: `SHOPWARE_SHOP_ID`, `SHOPWARE_DEPLOY_ENV`, optional
 `SHOPWARE_DATA_BASE` (default `/var/lib/shopware/data`) or
 `SHOPWARE_DATA_ROOT`. Laptop SSH: `SHOPWARE_SSH_HOST` / `USER` / `KEY` in
 `.env.local` (host defaults to the `--from` alias). Remote live data:
-`SHOPWARE_REMOTE_DATA_ROOT` or `{data_base}/{shop_id}/live`. Rewrite:
-`APP_URL`. Live gate: `SHOPWARE_ALLOW_LIVE_RESTORE`.
+`SHOPWARE_REMOTE_DATA_ROOT` or `{data_base}/{shop_id}/live`. Rewrite: host
+from `APP_URL` via `sales-channel:update:domain`. Live gate:
+`SHOPWARE_ALLOW_LIVE_RESTORE`.
 
 ### env init
 

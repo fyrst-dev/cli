@@ -36,14 +36,19 @@ Those scripts already call other tools:
   `deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`. Never
   build images or compile themes in these paths.
 - **URL rewrite (opt-in after restore):**
-  `bin/console fyrst:sales-channel:rewrite-urls` via compose `web`.
+  Shopware `bin/console sales-channel:update:domain <host>` via compose
+  `web`. The host is parsed from `APP_URL` (scheme and path stripped; the
+  port is not passed). Example: `APP_URL=https://staging.example.com` →
+  `staging.example.com`. Skipped on live, when no dump was imported, and
+  when `APP_URL` is unset. Not part of bare `db import`.
 
 `fyrst-dev/recipes` and `fyrst-dev/shopware-cd` stay the product sources for
-those scripts and the console command. This CLI does not become a second
-implementation of dump or of `fyrst:sales-channel:rewrite-urls`. It *does*
-implement the six overlay operator verbs in-process (including compose
-rollout) and it *does* call the MySQL client for import, because no upstream
-CLI command exists.
+those scripts. This CLI does not become a second implementation of dump or
+of sales-channel domain replacement. It calls Shopware
+`sales-channel:update:domain` after a non-live DB import and does not
+reimplement origin, scheme, or port replacement. It *does* implement the six
+overlay operator verbs in-process (including compose rollout) and it *does*
+call the MySQL client for import, because no upstream CLI command exists.
 
 ## Decision
 

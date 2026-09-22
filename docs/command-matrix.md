@@ -20,7 +20,7 @@ Delegated tools:
 | **DB import** | **`fyrst-cli shopware db import`** (MySQL/MariaDB client). shopware-cli has no import. |
 | VPS release | **`fyrst-cli shopware deploy release`** (`docker compose` with `deploy/compose.yaml` + `compose.prod.yaml` + `compose.vps.yaml`) |
 | VPS rollback | **`fyrst-cli shopware deploy rollback`** (same compose files; `IMAGE_TAG` from `.previous-tag`) |
-| Opt-in URL rewrite after restore | `bin/console fyrst:sales-channel:rewrite-urls` via compose `web` |
+| Opt-in URL rewrite after restore | `bin/console sales-channel:update:domain <host>` via compose `web` (host from `APP_URL`; scheme, path, and port omitted) |
 
 ## Map
 
@@ -61,9 +61,10 @@ for apply, pull, import, and backup recover (also in `shopware --help`).
 | `backup recover` | confirm flag (`--i-understand-this-restores-this-host` or `BACKUP_CONFIRM_RESTORE=1`) **and** `SHOPWARE_ALLOW_LIVE_RESTORE=1` when `SHOPWARE_DEPLOY_ENV=live` |
 | `deploy release` / `deploy rollback` | post-deploy health probe required (`DEPLOY_HEALTH_URL` or `APP_URL`). Ops escape: `--allow-no-deploy-health` or `ALLOW_NO_DEPLOY_HEALTH=1` |
 
-URL rewrite after apply uses `APP_URL` and is **skipped** on live (never
-applied). Staging / playground / dev need no extra live flag for backup
-recover (still need confirmation).
+URL rewrite after apply calls Shopware `sales-channel:update:domain` with
+the host from `APP_URL` (scheme and path stripped; port is not passed) and
+is **skipped** on live (never applied). Staging / playground / dev need no
+extra live flag for backup recover (still need confirmation).
 
 ## Shop env files
 
@@ -85,7 +86,7 @@ Data root: `{SHOPWARE_DATA_BASE}/{SHOPWARE_SHOP_ID}/{SHOPWARE_DEPLOY_ENV}`
 `SHOPWARE_DATA_ROOT`. SSH: `SHOPWARE_SSH_HOST` (defaults to the `--from`
 alias), `SHOPWARE_SSH_USER`, `SHOPWARE_SSH_KEY`. Port is always `22`. Remote
 live data: `SHOPWARE_REMOTE_DATA_ROOT` or `{data_base}/{shop_id}/live`.
-Rewrite: `APP_URL` only. CI `VPS_*` secrets stay secrets — they are not shop
+Rewrite: host from `APP_URL` (`sales-channel:update:domain`). CI `VPS_*` secrets stay secrets — they are not shop
 `.env`.
 
 ## Exact env init CLI
@@ -346,7 +347,11 @@ apply (kept for clap compatibility with `sync capture` / `sync pull`).
 4. If `--data` includes db: existing import module (`db.sql.gz` then `db.sql`).
 5. If rewrite was requested **and** db was restored: `docker compose … run
    --rm --pull never --entrypoint php web bin/console
-   fyrst:sales-channel:rewrite-urls …`. If db was skipped, rewrite is skipped.
+   sales-channel:update:domain <host>`. `<host>` is `APP_URL` with scheme and
+   path stripped (port is not passed). If db was skipped, or `APP_URL` is
+   unset, rewrite is skipped. Not run when `SHOPWARE_DEPLOY_ENV` is live
+   (`SHOPWARE_ALLOW_LIVE_RESTORE` does not enable it). Not part of bare
+   `db import`.
 6. Restore selected bind-mount items into `SHOPWARE_DATA_ROOT` or derived
    `$SHOPWARE_DATA_BASE/$SHOPWARE_SHOP_ID/$SHOPWARE_DEPLOY_ENV`
    (`SHOPWARE_DATA_BASE` defaults to `/var/lib/shopware/data`). Prefer rsync
@@ -355,7 +360,9 @@ apply (kept for clap compatibility with `sync capture` / `sync pull`).
 7. Start previously stopped app services.
 8. Non-fatal `cache:clear` when `IMAGE` is set; hints when rewrite was off.
 
-Passwords are never logged. Rewrite is not a Rust SQL rewriter.
+Passwords are never logged. Rewrite is not a Rust SQL rewriter. The CLI
+passes the `APP_URL` host to Shopware `sales-channel:update:domain` and does
+not replace scheme, port, or path itself.
 
 ## `shopware sync capture` (volumes implemented; not a dump)
 
@@ -410,9 +417,11 @@ dev). Typical cron: `--from live --data all`.
    operator instructions to run `shopware-cli project dump` on the source and
    place `db.sql.gz` for import (`fyrst-cli shopware db import --file` is the
    same module). `--skip-db` skips this leg.
-5. `fyrst:sales-channel:rewrite-urls` when `APP_URL` is set **and** a dump
-   was imported on a non-live consumer. Skipped when `--skip-db` / no dump
-   imported / live.
+5. `sales-channel:update:domain <host>` when `APP_URL` is set **and** a dump
+   was imported on a non-live consumer. `<host>` is the `APP_URL` host
+   (scheme and path stripped; port is not passed). Skipped when `--skip-db` /
+   no dump imported / live / `APP_URL` unset. `SHOPWARE_ALLOW_LIVE_RESTORE`
+   does not enable it. Not part of bare `db import`.
 6. Volume leg: rsync `SHOPWARE_REMOTE_DATA_ROOT/<item>/` (or derived
    `{data_base}/{shop_id}/live`) → local `$DATA_ROOT/<item>/` (tar/docker
    fallback if rsync cannot write), then `chown 82:82`. `--dry-run` prints

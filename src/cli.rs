@@ -43,7 +43,7 @@ env init = fyrst-cli shopware env init (shop-root .env after create + Flex).
 Release = fyrst-cli shopware deploy release (VPS compose; never builds).
 Rollback = fyrst-cli shopware deploy rollback (IMAGE_TAG from .previous-tag).
 sync capture = bind-mount trees into --snapshot-dir (not a dump).
-sync apply also restores bind-mount volumes and opt-in rewrite via compose web.
+sync apply also restores bind-mount volumes and opt-in sales-channel:update:domain via compose web.
 sync pull = rsync remote bind-mounts + import of an already-present dump (does not dump).
 sync local = VPS → local project-dev rsync (never DB; not SHOPWARE_DATA_ROOT; --data all refused).
 Backup = fyrst-cli shopware backup create (volumes + operator db.sql.gz; live allowed).
@@ -76,7 +76,7 @@ Database dumps are owned by `shopware-cli project dump`; fyrst-cli does not wrap
 `shopware deploy rollback` re-deploys IMAGE using IMAGE_TAG from `.previous-tag`. \
 `shopware sync capture` copies bind-mount / volume trees; it is not a dump command. \
 `shopware sync apply` loads --snapshot-dir (same import module, bind-mount volumes, \
-opt-in rewrite via compose web). \
+opt-in sales-channel:update:domain via compose web). \
 `shopware sync pull` pulls from `--from` (rsync bind-mounts + import of an already-present dump) and does not dump. \
 `shopware sync local` rsyncs VPS upload trees into a local project-dev checkout (never DB). \
 `shopware backup create` copies bind-mount trees into BACKUP_TARGET (live allowed) \
@@ -115,7 +115,7 @@ plan and does not write. Passwords are never printed.\n\n\
 `db import` is implemented: MySQL/MariaDB client import (Compose `mysql` exec, else a \
 one-shot client image for DATABASE_URL). `sync apply` uses that same import module, \
 restores bind-mount volumes from --snapshot-dir, stops/starts web/worker/scheduler, and \
-runs opt-in `bin/console fyrst:sales-channel:rewrite-urls` via compose `web`. \
+runs opt-in `bin/console sales-channel:update:domain` (host from `APP_URL`, scheme and path stripped, port omitted) via compose `web`. \
 `sync pull` is the cron/operator pull path: rsync remote bind-mounts onto this host, then \
 import `db.sql.gz` from `--snapshot-dir` if `--data` includes db (does not dump). \
 `--from local` is a capture+apply pipeline check, not the staging cron path. \
